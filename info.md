@@ -149,6 +149,66 @@
 - **Outline Button Style:** Beyaz border/text ile unified tasarım
 - **Smart Validation:** En az 1 aktif medya seçili olma kontrolü
 
+### 8. 🌐 **YENİ: Backend Entegrasyon & mDNS Sistemi - PRODUCTION READY**
+
+#### Real Backend API Integration:
+
+- **HTTP Client:** Flutter http package ile backend entegrasyonu
+- **Dual Endpoint System:**
+  - 🔗 **WiFi Endpoint:** `raspberrypi.local:3000/api/mobile/check`
+  - 📡 **Hotspot Endpoint:** `192.168.4.1:3000/api/mobile/check`
+- **JSON Response Handling:** Backend status parsing ve ConnectionStatus mapping
+
+#### 🔍 **Advanced mDNS Hostname Resolution**
+
+- **Custom mDNS Implementation:** Raw UDP socket ile multicast DNS query
+- **Target Address:** 224.0.0.251:5353 (standard mDNS multicast)
+- **RFC Compliant:** Proper mDNS packet format ve A record parsing
+- **Android DNS Fix:** .local hostname resolution sorunu çözüldü
+- **DNS Caching:** 5 dakika cache timeout ile performance optimizasyonu
+
+#### 🏗️ **ConnectionService Architecture**
+
+- **Singleton Pattern:** App-wide tek connection service instance
+- **Stream-based Updates:** Real-time UI synchronization
+- **Equality Operators:** Duplicate toast notification prevention
+- **Automatic Retry:** 30 saniye periyodik bağlantı kontrolü
+
+#### 📱 **Real-time UI Integration**
+
+- **Branded Messages:** "Nöbetix Pano WiFi/Hotspot ile Bağlandı" format
+- **Connection Status Icons:** WiFi/Hotspot/Offline için farklı ikonlar
+- **Live Toast Notifications:** Bağlantı durumu değişikliklerinde otomatik feedback
+- **Manual Refresh:** Kullanıcı manuel bağlantı kontrolü
+
+#### 🛠️ **Production Code Quality**
+
+- **debugPrint Logging:** Production-safe logging, print statements kaldırıldı
+- **Error Handling:** Comprehensive try-catch blokları
+- **Memory Management:** Stream subscription cleanup, overlay management
+- **Lint Compliance:** Flutter analyze clean, no warnings
+
+#### 🎯 **Technical Implementation Details**
+
+```dart
+// mDNS Query Implementation
+final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+socket.send(_buildMDNSQuery(hostname), InternetAddress('224.0.0.251'), 5353);
+
+// DNS Caching System
+Map<String, DNSCacheEntry> _dnsCache = {};
+const Duration _cacheTimeout = Duration(minutes: 5);
+
+// Connection Status Equality
+@override
+bool operator ==(Object other) =>
+    identical(this, other) ||
+    other is ConnectionStatus &&
+    runtimeType == other.runtimeType &&
+    isConnected == other.isConnected &&
+    type == other.type;
+```
+
 #### 🎯 **Mock Data & Functionality**
 
 - **6 Mock Media Items:** jpg, png, mp4 dosyaları mix

@@ -1,14 +1,251 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:vibration/vibration.dart';
 import '../widgets/animated_particles.dart';
+import '../widgets/animated_toast.dart';
+import '../services/connection_service.dart';
 import 'pharmacy_settings_page.dart';
 import 'screen_settings_page.dart';
 import 'wifi_settings_page.dart';
 import 'media_management_page.dart';
 
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  final ConnectionService _connectionService = ConnectionService();
+  ConnectionStatus _connectionStatus = ConnectionStatus.disconnected();
+  bool _isCheckingConnection = false;
+  StreamSubscription<ConnectionStatus>? _statusSubscription;
+  OverlayEntry? _activeToastEntry;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeConnection();
+  }
+
+  @override
+  void dispose() {
+    _statusSubscription?.cancel();
+    _connectionService.stopPeriodicCheck();
+    _removeActiveToast();
+    super.dispose();
+  }
+
+  void _initializeConnection() async {
+    // Status stream'i dinle
+    _statusSubscription = _connectionService.statusStream.listen((status) {
+      if (mounted) {
+        final previousStatus = _connectionStatus;
+        setState(() {
+          _connectionStatus = status;
+          _isCheckingConnection =
+              false; // Stream'den geldiğinde loading'i kapat
+        });
+
+        // Sadece durum değiştiğinde toast göster
+        if (previousStatus != status) {
+          _showConnectionToast(status);
+        }
+      }
+    });
+
+    // İlk bağlantı kontrolü
+    setState(() {
+      _isCheckingConnection = true;
+    });
+
+    try {
+      await _connectionService.checkConnection();
+    } catch (e) {
+      debugPrint('Connection check failed: $e');
+    } finally {
+      // Eğer stream'den henüz gelmemişse, manuel olarak loading'i kapat
+      if (mounted) {
+        setState(() {
+          _isCheckingConnection = false;
+        });
+      }
+    }
+
+    // Periyodik kontrolü başlat
+    _connectionService.startPeriodicCheck();
+  }
+
+  void _showConnectionToast(ConnectionStatus status) {
+    if (!mounted) return;
+
+    if (status.isConnected) {
+      String subtitle;
+      switch (status.type) {
+        case ConnectionType.wifi:
+          subtitle = 'Nöbetix Pano WiFi ile Bağlandı';
+          break;
+        case ConnectionType.hotspot:
+          subtitle = 'Nöbetix Pano Hotspot ile Bağlandı';
+          break;
+        default:
+          subtitle = 'Nöbetix Pano Bağlandı';
+      }
+
+      _showToast(
+        icon: status.type == ConnectionType.wifi
+            ? Icons.wifi
+            : Icons.portable_wifi_off,
+        iconColor: const Color(0xFF38A169),
+        title: 'Bağlantı Kuruldu',
+        subtitle: subtitle,
+        backgroundColor: const Color(0xFF38A169),
+      );
+    } else {
+      _showToast(
+        icon: Icons.wifi_off,
+        iconColor: const Color(0xFFE53E3E),
+        title: 'Bağlantı Hatası',
+        subtitle: 'Nöbetix Pano Bağlantı Kurulamadı',
+        backgroundColor: const Color(0xFFE53E3E),
+      );
+    }
+  }
+
+  void _showToast({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
+    required Color backgroundColor,
+  }) {
+    // Önceki toast varsa kaldır
+    _removeActiveToast();
+
+    final overlay = Overlay.of(context, rootOverlay: true);
+
+    _activeToastEntry = OverlayEntry(
+      builder: (ctx) => AnimatedToastOverlay(
+        context: context,
+        icon: icon,
+        iconColor: iconColor,
+        title: title,
+        subtitle: subtitle,
+        backgroundColor: backgroundColor,
+        onDismiss: () {
+          _removeActiveToast();
+        },
+      ),
+    );
+
+    overlay.insert(_activeToastEntry!);
+
+    // 3 saniye sonra otomatik kaldır
+    Timer(const Duration(seconds: 3), () {
+      _removeActiveToast();
+    });
+  }
+
+  void _removeActiveToast() {
+    _activeToastEntry?.remove();
+    _activeToastEntry = null;
+  }
+
+  Widget _buildConnectionStatusIcon() {
+    if (_isCheckingConnection) {
+      return const SizedBox(
+        width: 16,
+        height: 16,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF718096)),
+        ),
+      );
+    }
+
+    switch (_connectionStatus.type) {
+      case ConnectionType.wifi:
+        return const Icon(Icons.wifi, color: Color(0xFF38A169), size: 16);
+      case ConnectionType.hotspot:
+        return const Icon(
+          Icons.portable_wifi_off,
+          color: Color(0xFF38A169),
+          size: 16,
+        );
+      case ConnectionType.none:
+        return const Icon(Icons.wifi_off, color: Color(0xFFE53E3E), size: 16);
+    }
+  }
+
+  String _getConnectionStatusText() {
+    if (_isCheckingConnection) {
+      return 'Bağlantı kontrol ediliyor...';
+    }
+
+    if (_connectionStatus.isConnected) {
+      switch (_connectionStatus.type) {
+        case ConnectionType.wifi:
+          return 'Nöbetix Pano WiFi ile Bağlandı';
+        case ConnectionType.hotspot:
+          return 'Nöbetix Pano Hotspot ile Bağlandı';
+        case ConnectionType.none:
+          return 'Nöbetix Pano Bağlantı Kurulamadı';
+      }
+    } else {
+      return 'Nöbetix Pano Bağlantı Kurulamadı';
+    }
+  }
+
+  Color _getConnectionStatusColor() {
+    if (_isCheckingConnection) {
+      return const Color(0xFF718096);
+    }
+    return _connectionStatus.isConnected
+        ? const Color(0xFF38A169)
+        : const Color(0xFFE53E3E);
+  }
+
+  void _handleManualConnectionCheck() async {
+    // Haptic feedback
+    try {
+      final hasVibrator = await Vibration.hasVibrator();
+      if (hasVibrator == true) {
+        await Vibration.vibrate(duration: 50);
+      }
+    } catch (e) {
+      // Vibration hatası durumunda sessizce devam et
+    }
+
+    // Manuel bağlantı kontrolü başlat
+    setState(() {
+      _isCheckingConnection = true;
+    });
+
+    try {
+      await _connectionService.checkConnection();
+    } catch (e) {
+      debugPrint('Manual connection check failed: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCheckingConnection = false;
+        });
+      }
+    }
+
+    // Toast göster
+    if (mounted) {
+      _showToast(
+        icon: Icons.sync,
+        iconColor: const Color(0xFF3182CE),
+        title: 'Bağlantı Kontrolü',
+        subtitle: 'Bağlantı durumu güncellendi',
+        backgroundColor: const Color(0xFF3182CE),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -132,18 +369,59 @@ class HomePage extends StatelessWidget {
                             ),
                           ],
                         ),
+                        const SizedBox(height: 20),
+
+                        // Bağlantı durumu - kompakt hale getirildi
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 12,
+                            horizontal: 16,
+                          ),
+                          decoration: BoxDecoration(
+                            color: _getConnectionStatusColor().withValues(
+                              alpha: 0.1,
+                            ),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: _getConnectionStatusColor().withValues(
+                                alpha: 0.3,
+                              ),
+                              width: 1,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              _buildConnectionStatusIcon(),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  _getConnectionStatusText(),
+                                  textAlign: TextAlign.center,
+                                  style: GoogleFonts.inter(
+                                    fontSize: 14,
+                                    color: _getConnectionStatusColor(),
+                                    fontWeight: FontWeight.w500,
+                                    height: 1.2,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                         const SizedBox(height: 16),
-                        // Üçüncü satır - Sistem Durum Kontrolü (yatay)
+
+                        // Bağlantıyı Kontrol Et butonu
                         _InteractiveCard(
-                          onTap: () => _handleCardTap(context, 'Sistem Durum'),
+                          onTap: () => _handleManualConnectionCheck(),
                           child: Container(
                             width: double.infinity,
-                            height: 70,
+                            height: 60,
                             decoration: BoxDecoration(
                               color: const Color(
                                 0xFF2A2A3E,
                               ).withValues(alpha: 0.8),
-                              borderRadius: BorderRadius.circular(16),
+                              borderRadius: BorderRadius.circular(14),
                               border: Border.all(
                                 color: Colors.white.withValues(alpha: 0.1),
                                 width: 1,
@@ -151,37 +429,38 @@ class HomePage extends StatelessWidget {
                               boxShadow: [
                                 BoxShadow(
                                   color: Colors.black.withValues(alpha: 0.2),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 4),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 3),
                                 ),
                               ],
                             ),
                             child: Padding(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
+                                horizontal: 18,
                               ),
                               child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
                                   Container(
-                                    width: 40,
-                                    height: 40,
+                                    width: 36,
+                                    height: 36,
                                     decoration: BoxDecoration(
                                       color: const Color(
-                                        0xFF9F7AEA,
+                                        0xFF3182CE,
                                       ).withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(10),
+                                      borderRadius: BorderRadius.circular(8),
                                     ),
                                     child: const Icon(
-                                      Icons.analytics_outlined,
-                                      size: 24,
-                                      color: Color(0xFF9F7AEA),
+                                      Icons.sync,
+                                      size: 20,
+                                      color: Color(0xFF3182CE),
                                     ),
                                   ),
-                                  const SizedBox(width: 16),
+                                  const SizedBox(width: 12),
                                   Text(
-                                    'Sistem Durum Kontrolü',
+                                    'Bağlantıyı Kontrol Et',
                                     style: GoogleFonts.inter(
-                                      fontSize: 16,
+                                      fontSize: 15,
                                       fontWeight: FontWeight.w500,
                                       color: Colors.white,
                                     ),
@@ -196,42 +475,16 @@ class HomePage extends StatelessWidget {
                   ),
                 ),
 
-                // Bağlantı durumu ve sürüm bilgisi
+                // Sürüm bilgisi
                 Padding(
                   padding: const EdgeInsets.only(bottom: 30),
-                  child: Column(
-                    children: [
-                      // Bağlantı durumu
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            Icons.check_circle,
-                            color: Color(0xFF38A169),
-                            size: 16,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Nobetix Pano Bağlantısı Başarılı',
-                            style: GoogleFonts.inter(
-                              fontSize: 13,
-                              color: const Color(0xFF38A169),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      // Sürüm bilgisi
-                      Text(
-                        'Sürüm V.1.0.0',
-                        style: GoogleFonts.inter(
-                          fontSize: 12,
-                          color: Colors.white.withValues(alpha: 0.5),
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
-                    ],
+                  child: Text(
+                    'Sürüm V.1.0.0',
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      color: Colors.white.withValues(alpha: 0.5),
+                      fontWeight: FontWeight.w400,
+                    ),
                   ),
                 ),
               ],
