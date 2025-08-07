@@ -207,6 +207,32 @@ class _HomePageState extends State<HomePage> {
         : const Color(0xFFE53E3E);
   }
 
+  // Kartın aktif olup olmadığını kontrol eden method
+  bool _isCardEnabled(String cardType) {
+    switch (_connectionStatus.type) {
+      case ConnectionType.none:
+        return false; // Tüm kartlar deaktif
+      case ConnectionType.hotspot:
+        // Sadece Wi-Fi & Ağ ve Ekran aktif
+        return cardType == 'Wi-Fi & Ağ' || cardType == 'Ekran';
+      case ConnectionType.wifi:
+        // Wi-Fi & Ağ hariç hepsi aktif
+        return cardType != 'Wi-Fi & Ağ';
+    }
+  }
+
+  // Deaktif kartlar için uyarı mesajını döndüren method
+  String _getDisabledCardMessage(String cardType) {
+    switch (_connectionStatus.type) {
+      case ConnectionType.none:
+        return 'Nöbetix Panoya bağlanması gerekiyor';
+      case ConnectionType.hotspot:
+        return 'Nöbetix panoyu aynı modeme bağlaması gerekiyor';
+      case ConnectionType.wifi:
+        return 'Bu ayarın yapılması için Nöbetix panoya hotspot ile bağlanılması gerekiyor';
+    }
+  }
+
   void _handleManualConnectionCheck() async {
     // Haptic feedback
     try {
@@ -414,6 +440,7 @@ class _HomePageState extends State<HomePage> {
                         // Bağlantıyı Kontrol Et butonu
                         _InteractiveCard(
                           onTap: () => _handleManualConnectionCheck(),
+                          isEnabled: true, // Bu buton her zaman aktif
                           child: Container(
                             width: double.infinity,
                             height: 60,
@@ -501,20 +528,39 @@ class _HomePageState extends State<HomePage> {
     required Color iconColor,
     required VoidCallback onTap,
   }) {
+    // Kartın aktif olup olmadığını kontrol et - title'dan cardType çıkar
+    String cardType;
+    if (title.contains('Nöbetçi Eczane')) {
+      cardType = 'Nöbetçi Eczane';
+    } else if (title.contains('Wi-Fi & Ağ')) {
+      cardType = 'Wi-Fi & Ağ';
+    } else if (title.contains('Medya')) {
+      cardType = 'Medya';
+    } else if (title.contains('Ekran')) {
+      cardType = 'Ekran';
+    } else {
+      cardType = title.replaceAll('\n', ' ');
+    }
+
+    final isEnabled = _isCardEnabled(cardType);
+    final opacity = isEnabled ? 1.0 : 0.4;
+    final finalIconColor = isEnabled ? iconColor : const Color(0xFF718096);
+
     return _InteractiveCard(
       onTap: onTap,
+      isEnabled: isEnabled,
       child: Container(
         height: 140,
         decoration: BoxDecoration(
-          color: const Color(0xFF2A2A3E).withValues(alpha: 0.8),
+          color: const Color(0xFF2A2A3E).withValues(alpha: 0.8 * opacity),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: Colors.white.withValues(alpha: 0.1),
+            color: Colors.white.withValues(alpha: 0.1 * opacity),
             width: 1,
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.2),
+              color: Colors.black.withValues(alpha: 0.2 * opacity),
               blurRadius: 10,
               offset: const Offset(0, 4),
             ),
@@ -527,10 +573,10 @@ class _HomePageState extends State<HomePage> {
               width: 50,
               height: 50,
               decoration: BoxDecoration(
-                color: iconColor.withValues(alpha: 0.15),
+                color: finalIconColor.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icon, size: 28, color: iconColor),
+              child: Icon(icon, size: 28, color: finalIconColor),
             ),
             const SizedBox(height: 12),
             Text(
@@ -539,7 +585,7 @@ class _HomePageState extends State<HomePage> {
               style: GoogleFonts.inter(
                 fontSize: 14,
                 fontWeight: FontWeight.w500,
-                color: Colors.white,
+                color: Colors.white.withValues(alpha: opacity),
                 height: 1.3,
               ),
             ),
@@ -563,6 +609,22 @@ class _HomePageState extends State<HomePage> {
     // Context hala geçerliyse devam et
     if (!context.mounted) return;
 
+    // Kartın aktif olup olmadığını kontrol et
+    final isEnabled = _isCardEnabled(cardType);
+
+    if (!isEnabled) {
+      // Deaktif kart için uyarı göster
+      _showToast(
+        icon: Icons.warning,
+        iconColor: const Color(0xFFF59E0B),
+        title: 'Erişim Kısıtlı',
+        subtitle: _getDisabledCardMessage(cardType),
+        backgroundColor: const Color(0xFFF59E0B),
+      );
+      return;
+    }
+
+    // Aktif kartlar için normal navigasyon
     if (cardType == 'Nöbetçi Eczane') {
       Navigator.push(
         context,
@@ -601,8 +663,13 @@ class _HomePageState extends State<HomePage> {
 class _InteractiveCard extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
+  final bool isEnabled;
 
-  const _InteractiveCard({required this.child, required this.onTap});
+  const _InteractiveCard({
+    required this.child,
+    required this.onTap,
+    this.isEnabled = true,
+  });
 
   @override
   State<_InteractiveCard> createState() => _InteractiveCardState();
@@ -643,16 +710,23 @@ class _InteractiveCardState extends State<_InteractiveCard>
   }
 
   void _handleTapDown(TapDownDetails details) {
-    _animationController.forward();
+    if (widget.isEnabled) {
+      _animationController.forward();
+    }
   }
 
   void _handleTapUp(TapUpDetails details) {
-    _animationController.reverse();
+    if (widget.isEnabled) {
+      _animationController.reverse();
+    }
+    // isEnabled false olsa bile onTap'i çağır - _handleCardTap içinde kontrol yapılacak
     widget.onTap();
   }
 
   void _handleTapCancel() {
-    _animationController.reverse();
+    if (widget.isEnabled) {
+      _animationController.reverse();
+    }
   }
 
   @override
