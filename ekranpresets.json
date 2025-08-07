@@ -1,0 +1,35 @@
+[
+  {
+    "model": "P1.86",
+    "variants": [
+      { "module": "64x160", "width": 344, "height": 860 },
+      { "module": "64x176", "width": 344, "height": 946 },
+      { "module": "64x192", "width": 344, "height": 1032 },
+      { "module": "96x160", "width": 516, "height": 860 },
+      { "module": "96x176", "width": 516, "height": 946 },
+      { "module": "96x192", "width": 516, "height": 1032 }
+    ]
+  },
+  {
+    "model": "P2.5",
+    "variants": [
+      { "module": "64x160", "width": 256, "height": 640 },
+      { "module": "64x176", "width": 256, "height": 704 },
+      { "module": "64x192", "width": 256, "height": 768 },
+      { "module": "96x160", "width": 384, "height": 640 },
+      { "module": "96x176", "width": 384, "height": 704 },
+      { "module": "96x192", "width": 384, "height": 768 }
+    ]
+  },
+  {
+    "model": "P3.0",
+    "variants": [
+      { "module": "64x160", "width": 208, "height": 520 },
+      { "module": "64x176", "width": 208, "height": 572 },
+      { "module": "64x192", "width": 208, "height": 624 },
+      { "module": "96x160", "width": 312, "height": 520 },
+      { "module": "96x176", "width": 312, "height": 572 },
+      { "module": "96x192", "width": 312, "height": 624 }
+    ]
+  }
+]

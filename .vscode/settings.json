@@ -1,0 +1,47 @@
+{
+  "java.enabled": false,
+  "java.jdt.ls.enabled": false,
+  "java.server.launchMode": "Standard",
+  "java.import.gradle.enabled": false,
+  "java.import.maven.enabled": false,
+  "java.autobuild.enabled": false,
+  "java.maxConcurrentBuilds": 1,
+  "java.import.generatesMetadataFilesAtProjectRoot": false,
+  "redhat.telemetry.enabled": false,
+  "gradle.nestedProjects": false,
+  "files.exclude": {
+    "**/.gradle": true,
+    "**/build": true,
+    "**/.dart_tool": true,
+    "**/android/.gradle": true,
+    "**/android/build": true,
+    "**/android/app/build": true,
+    "**/ios/build": true,
+    "**/ios/Pods": true,
+    "**/ios/.symlinks": true,
+    "**/ios/Flutter/Generated.xcconfig": true,
+    "**/ios/Flutter/flutter_export_environment.sh": true,
+    "**/.project": true,
+    "**/.classpath": true,
+    "**/.factorypath": true,
+    "**/.settings": true
+  },
+  "search.exclude": {
+    "**/.gradle": true,
+    "**/build": true,
+    "**/.dart_tool": true,
+    "**/android/.gradle": true,
+    "**/android/build": true,
+    "**/ios/build": true,
+    "**/ios/Pods": true,
+    "**/.project": true,
+    "**/.classpath": true,
+    "**/.settings": true
+  },
+  "files.watcherExclude": {
+    "**/android/**": true,
+    "**/ios/**": true,
+    "**/.gradle/**": true,
+    "**/build/**": true
+  }
+}
