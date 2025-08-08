@@ -2,12 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:vibration/vibration.dart';
+import 'package:http/http.dart' as http;
 import 'dart:ui';
+import 'dart:convert';
 import '../widgets/animated_particles.dart';
 import '../widgets/animated_toast.dart';
 
 class ScreenSettingsPage extends StatefulWidget {
-  const ScreenSettingsPage({super.key});
+  final VoidCallback? onSystemRestart;
+
+  const ScreenSettingsPage({super.key, this.onSystemRestart});
 
   @override
   State<ScreenSettingsPage> createState() => _ScreenSettingsPageState();
@@ -25,14 +29,15 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
   List<Map<String, dynamic>> _presetData = [];
 
   // Aktif toast'ları takip etmek için
-  OverlayEntry? _activeToastEntry; // Button press state
-  bool _isKaydetPressed = false;
+  OverlayEntry? _activeToastEntry;
   bool _isGuncellePressed = false;
+  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
     _loadPresetData();
+    _loadCurrentScreenConfig();
   }
 
   void _loadPresetData() {
@@ -235,26 +240,19 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
 
                         const SizedBox(height: 40),
 
-                        // Aksiyon Butonları
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _buildActionButton(
-                                title: 'KAYDET',
-                                color: const Color(0xFF38A169),
-                                onTap: _saveSettings,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: _buildActionButton(
-                                title: 'EKRANI GÜNCELLE',
-                                color: const Color(0xFF3182CE),
-                                onTap: _updateScreen,
-                              ),
-                            ),
-                          ],
+                        // Aksiyon Butonu (sadece Güncelle)
+                        _buildActionButton(
+                          title: _isLoading
+                              ? 'GÜNCELLENİYOR...'
+                              : 'EKRANI GÜNCELLE',
+                          color: const Color(0xFF3182CE),
+                          onTap: _isLoading ? () {} : _updateScreen,
                         ),
+
+                        const SizedBox(height: 24),
+
+                        // Bilgilendirme Mesajı
+                        _buildInfoMessage(),
 
                         const SizedBox(height: 24),
                       ],
@@ -535,17 +533,12 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
     required Color color,
     required VoidCallback onTap,
   }) {
-    final isKaydet = title.contains('KAYDET');
-    final isPressed = isKaydet ? _isKaydetPressed : _isGuncellePressed;
+    final isPressed = _isGuncellePressed;
 
     return GestureDetector(
       onTapDown: (_) {
         setState(() {
-          if (isKaydet) {
-            _isKaydetPressed = true;
-          } else {
-            _isGuncellePressed = true;
-          }
+          _isGuncellePressed = true;
         });
 
         // Sadece hafif dokunma feedback'i
@@ -554,11 +547,7 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
       onTapUp: (_) {
         // Hemen state'i sıfırla
         setState(() {
-          if (isKaydet) {
-            _isKaydetPressed = false;
-          } else {
-            _isGuncellePressed = false;
-          }
+          _isGuncellePressed = false;
         });
 
         // Fonksiyonu çağır (içinde titreşim olacak)
@@ -566,11 +555,7 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
       },
       onTapCancel: () {
         setState(() {
-          if (isKaydet) {
-            _isKaydetPressed = false;
-          } else {
-            _isGuncellePressed = false;
-          }
+          _isGuncellePressed = false;
         });
       },
       child: AnimatedContainer(
@@ -605,16 +590,45 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
         ),
         child: Container(
           alignment: Alignment.center,
-          child: AnimatedDefaultTextStyle(
-            duration: const Duration(milliseconds: 100),
-            style: GoogleFonts.inter(
-              fontSize: isPressed ? 13 : 14,
-              fontWeight: FontWeight.w600,
-              color: Colors.white.withValues(alpha: isPressed ? 0.95 : 0.8),
-              letterSpacing: 0.5,
-            ),
-            child: Text(title),
-          ),
+          child: _isLoading
+              ? Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    AnimatedDefaultTextStyle(
+                      duration: const Duration(milliseconds: 100),
+                      style: GoogleFonts.inter(
+                        fontSize: isPressed ? 13 : 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white.withValues(
+                          alpha: isPressed ? 0.95 : 0.8,
+                        ),
+                        letterSpacing: 0.5,
+                      ),
+                      child: Text(title),
+                    ),
+                  ],
+                )
+              : AnimatedDefaultTextStyle(
+                  duration: const Duration(milliseconds: 100),
+                  style: GoogleFonts.inter(
+                    fontSize: isPressed ? 13 : 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white.withValues(
+                      alpha: isPressed ? 0.95 : 0.8,
+                    ),
+                    letterSpacing: 0.5,
+                  ),
+                  child: Text(title),
+                ),
         ),
       ),
     );
@@ -663,36 +677,260 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
     }
   }
 
-  void _saveSettings() {
-    String width = _widthController.text;
-    String height = _heightController.text;
+  // API: Mevcut ekran ayarlarını yükle
+  Future<void> _loadCurrentScreenConfig() async {
+    setState(() {
+      _isLoading = true;
+    });
 
-    if (width.isEmpty || height.isEmpty) {
-      _showErrorFeedback('Lütfen genişlik ve yükseklik değerlerini girin.');
-      return;
+    try {
+      final response = await http
+          .get(
+            Uri.parse('http://192.168.4.1:3000/api/mobile/config/screen'),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true && data['screen'] != null) {
+          setState(() {
+            _widthController.text = data['screen']['width'].toString();
+            _heightController.text = data['screen']['height'].toString();
+          });
+          debugPrint('Screen config loaded: ${data['screen']}');
+        } else {
+          _showErrorFeedback('Ekran ayarları alınamadı');
+        }
+      } else {
+        _showErrorFeedback('Bağlantı hatası: ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('Load screen config error: $e');
+      _showErrorFeedback('Nöbetix panoya bağlantı kurulamadı');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  // API: Ekran ayarlarını güncelle
+  Future<void> _updateScreenConfig(int width, int height) async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    // PUT request'i gönder (sonucu önemli değil)
+    try {
+      final response = await http
+          .put(
+            Uri.parse('http://192.168.4.1:3000/api/mobile/config/screen'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'width': width, 'height': height}),
+          )
+          .timeout(const Duration(seconds: 5));
+
+      debugPrint('PUT response status: ${response.statusCode}');
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        debugPrint('PUT response data: $data');
+      }
+    } catch (e) {
+      debugPrint('PUT request error (normal): $e');
     }
 
-    // Burada ayarları kaydetme işlemi yapılacak
+    // PUT başarılı olsun ya da olmasın, sistem restart kontrolüne geç
+    debugPrint('Starting system restart sequence...');
+
+    // ConnectionService'i durdur (home page'de)
+    widget.onSystemRestart?.call();
+
+    // Başarılı mesajı göster
     _showSuccessFeedback(
-      'Ayarlar Kaydedildi',
-      'Ekran ayarları başarıyla kaydedildi',
+      'Sistem Yeniden Başlatılıyor',
+      'Ayarlar uygulanıyor, lütfen bekleyin...',
     );
+
+    // Sistem restart kontrolü - hem hotspot hem WiFi kontrol et
+    // Loading'i burada kapatmayacağız, _waitForSystemRestart içinde kapatılacak
+    await _waitForSystemRestart();
+  }
+
+  // Sistem restart kontrolü - hem hotspot hem WiFi kontrol et
+  Future<void> _waitForSystemRestart() async {
+    debugPrint('Waiting for system restart...');
+
+    // Toast mesajını göster ve 15 saniye boyunca tut
+    _showCustomToast(
+      icon: Icons.sync,
+      iconColor: const Color(0xFF3182CE),
+      title: 'Sistem Başlatılıyor',
+      subtitle: 'Sistem yeniden başlatılıyor...',
+      backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
+      autoHide: false, // Otomatik kapanmasın
+    );
+
+    // İlk 15 saniye bekle - sistem restart olması için
+    debugPrint('Waiting 15 seconds for system to restart...');
+    await Future.delayed(const Duration(seconds: 15));
+
+    // Toast mesajını güncelle ve kontroller bitene kadar tut
+    _showCustomToast(
+      icon: Icons.sync,
+      iconColor: const Color(0xFF3182CE),
+      title: 'Sistem Başlatılıyor',
+      subtitle: 'Bağlantı kontrol ediliyor...',
+      backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
+      autoHide: false, // Otomatik kapanmasın
+    );
+
+    const maxAttempts = 30; // 30 * 2 saniye = 60 saniye max
+    int attempts = 0;
+
+    while (attempts < maxAttempts) {
+      if (!mounted) return;
+
+      attempts++;
+      debugPrint('System restart check attempt: $attempts/$maxAttempts');
+
+      // Hem hotspot hem WiFi kontrol et
+      bool isSystemReady = await _checkSystemAvailability();
+
+      if (isSystemReady) {
+        debugPrint('System is ready! Returning to home page.');
+
+        // Başarı mesajını göster ve 3 saniye tut
+        _showCustomToast(
+          icon: Icons.check_circle,
+          iconColor: const Color(0xFF38A169),
+          title: 'Sistem Hazır',
+          subtitle: 'Ana sayfaya dönülüyor...',
+          backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
+          autoHide: false, // Manuel kontrol
+        );
+
+        // 3 saniye bekle, sonra ana sayfaya dön
+        await Future.delayed(const Duration(seconds: 3));
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+          // Toast'ı temizle
+          _removeActiveToast();
+          Navigator.pop(context);
+        }
+        return;
+      }
+
+      // Her denemede toast'ı güncelle
+      if (mounted) {
+        _showCustomToast(
+          icon: Icons.sync,
+          iconColor: const Color(0xFF3182CE),
+          title: 'Sistem Başlatılıyor',
+          subtitle: 'Bağlantı kontrol ediliyor... ($attempts/$maxAttempts)',
+          backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
+          autoHide: false, // Otomatik kapanmasın
+        );
+      }
+
+      // 2 saniye bekle ve tekrar dene
+      await Future.delayed(const Duration(seconds: 2));
+    }
+
+    // Timeout durumu - hata mesajını göster ve 5 saniye tut
+    debugPrint('System restart timeout after ${maxAttempts * 2} seconds');
+    _showCustomToast(
+      icon: Icons.error_outline,
+      iconColor: const Color(0xFFE53E3E),
+      title: 'Zaman Aşımı',
+      subtitle: 'Sistem başlatma zaman aşımı. Ana sayfaya dönülüyor...',
+      backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
+      autoHide: false, // Manuel kontrol
+    );
+
+    // 5 saniye bekle ve ana sayfaya dön
+    await Future.delayed(const Duration(seconds: 5));
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+      // Toast'ı temizle
+      _removeActiveToast();
+      Navigator.pop(context);
+    }
+  }
+
+  // Sistem hazır olup olmadığını kontrol et (hem hotspot hem WiFi)
+  Future<bool> _checkSystemAvailability() async {
+    try {
+      // Önce hotspot kontrol et
+      final hotspotResponse = await http
+          .get(
+            Uri.parse('http://192.168.4.1:3000/api/mobile/check'),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 3));
+
+      if (hotspotResponse.statusCode == 200) {
+        debugPrint('System available via hotspot');
+        return true;
+      }
+    } catch (e) {
+      debugPrint('Hotspot check failed: $e');
+    }
+
+    try {
+      // WiFi ile kontrol et (mDNS ile çözümlenmiş IP veya varsayılan)
+      // ConnectionService'teki gibi mDNS resolution yapabiliriz
+      final wifiResponse = await http
+          .get(
+            Uri.parse('http://raspberrypi.local:3000/api/mobile/check'),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 3));
+
+      if (wifiResponse.statusCode == 200) {
+        debugPrint('System available via WiFi');
+        return true;
+      }
+    } catch (e) {
+      debugPrint('WiFi check failed: $e');
+    }
+
+    debugPrint('System not available yet');
+    return false;
   }
 
   void _updateScreen() {
-    String width = _widthController.text;
-    String height = _heightController.text;
+    String widthStr = _widthController.text.trim();
+    String heightStr = _heightController.text.trim();
 
-    if (width.isEmpty || height.isEmpty) {
+    if (widthStr.isEmpty || heightStr.isEmpty) {
       _showErrorFeedback('Lütfen genişlik ve yükseklik değerlerini girin.');
       return;
     }
 
-    // Burada ekranı güncelleme işlemi yapılacak
-    _showSuccessFeedback(
-      'Ekran Güncellendi',
-      'Pano ekranı başarıyla güncellendi',
-    );
+    int? width = int.tryParse(widthStr);
+    int? height = int.tryParse(heightStr);
+
+    if (width == null || height == null) {
+      _showErrorFeedback('Lütfen geçerli sayı değerleri girin.');
+      return;
+    }
+
+    if (width < 100 || width > 1032 || height < 208 || height > 1032) {
+      _showErrorFeedback(
+        'Genişlik 100-1032, yükseklik 208-1032 arasında olmalıdır.',
+      );
+      return;
+    }
+
+    // API çağrısını yap
+    _updateScreenConfig(width, height);
   }
 
   void _showSuccessFeedback(String title, String subtitle) {
@@ -708,6 +946,7 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
           title: title,
           subtitle: subtitle,
           backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
+          autoHide: false, // Otomatik kapanmasın
         );
       }
     });
@@ -737,6 +976,7 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
     required String title,
     required String subtitle,
     required Color backgroundColor,
+    bool autoHide = true, // Yeni parametre
   }) {
     // Önceki toast varsa kaldır
     _removeActiveToast();
@@ -751,6 +991,7 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
         title: title,
         subtitle: subtitle,
         backgroundColor: backgroundColor,
+        autoHide: autoHide, // Parametre geç
         onDismiss: () {
           _removeActiveToast();
         },
@@ -758,5 +999,64 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
     );
 
     overlay.insert(_activeToastEntry!);
+  }
+
+  Widget _buildInfoMessage() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A3E).withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.1),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF59E0B).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(
+              Icons.settings_suggest,
+              color: Color(0xFFF59E0B),
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Üretici Ayarı',
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFFF59E0B),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Bu ekran çözünürlük ayarları genellikle üretici tarafından önceden yapılandırılmıştır. Normal kullanımda değiştirilmesi gerekmez. '
+                  'Eğer manuel ayarlama yapmak istiyorsanız, geçerli değer aralıkları: Genişlik 100-1032px, Yükseklik 208-1032px\'dir. '
+                  'Hatalı değerler ekranda görüntü problemlerine neden olabilir.',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w400,
+                    color: Colors.white.withValues(alpha: 0.8),
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

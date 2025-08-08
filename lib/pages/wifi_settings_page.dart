@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:vibration/vibration.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../widgets/animated_particles.dart';
 import '../widgets/animated_toast.dart';
 
@@ -13,13 +15,7 @@ class WifiSettingsPage extends StatefulWidget {
 }
 
 class _WifiSettingsPageState extends State<WifiSettingsPage> {
-  // Mock bağlantı durumu (0: Aynı Wi-Fi, 1: Hotspot, 2: Bağlantı yok)
-  int connectionStatus = 2;
-
   // Form controllers
-  final TextEditingController hotspotSSIDController = TextEditingController();
-  final TextEditingController hotspotPasswordController =
-      TextEditingController();
   final TextEditingController wifiSSIDController = TextEditingController();
   final TextEditingController wifiPasswordController = TextEditingController();
 
@@ -27,15 +23,20 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
   OverlayEntry? _activeToastEntry;
 
   // Button press states
-  bool _isHotspotPressed = false;
   bool _isWiFiPressed = false;
+  bool _isLoading = false;
+  bool _isPasswordVisible = false; // Şifre görünürlük kontrolü
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCurrentNetworkConfig();
+  }
 
   @override
   void dispose() {
     // Sayfa kapanırken aktif toast'ı kaldır
     _removeActiveToast();
-    hotspotSSIDController.dispose();
-    hotspotPasswordController.dispose();
     wifiSSIDController.dispose();
     wifiPasswordController.dispose();
     super.dispose();
@@ -115,16 +116,6 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Bağlantı Durumu Kartı
-                        _buildConnectionStatusCard(),
-
-                        const SizedBox(height: 32),
-
-                        // Hotspot Bağlantı Bölümü
-                        _buildHotspotSection(),
-
-                        const SizedBox(height: 32),
-
                         // Wi-Fi Bağlantı Bölümü
                         _buildWiFiSection(),
 
@@ -155,120 +146,6 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
     );
   }
 
-  Widget _buildConnectionStatusCard() {
-    String statusText;
-    IconData statusIcon;
-    Color statusColor;
-
-    switch (connectionStatus) {
-      case 0:
-        statusText = "Ekran ile aynı Wi-Fi ağına bağlısınız.";
-        statusIcon = Icons.wifi;
-        statusColor = const Color(0xFF38A169);
-        break;
-      case 1:
-        statusText = "Ekranın Hotspot ağına bağlısınız.";
-        statusIcon = Icons.wifi_tethering;
-        statusColor = const Color(0xFF3182CE);
-        break;
-      default:
-        statusText =
-            "Ekrana bağlantı kurulamadı. Lütfen Wi-Fi ayarlarından bağlanın.";
-        statusIcon = Icons.wifi_off;
-        statusColor = const Color(0xFFE53E3E);
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF2A2A3E).withValues(alpha: 0.8),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.1),
-          width: 1,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: statusColor.withValues(alpha: 0.1),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: statusColor.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(statusIcon, color: statusColor, size: 28),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Bağlantı Durumu',
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white.withValues(alpha: 0.6),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  statusText,
-                  style: GoogleFonts.inter(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHotspotSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildSectionTitle('Nöbetix Ekrana\'a Bağlanma :'),
-
-        _buildInputField(
-          controller: hotspotSSIDController,
-          label: 'Nöbetix SSID',
-          icon: Icons.wifi_tethering,
-        ),
-
-        const SizedBox(height: 16),
-
-        _buildInputField(
-          controller: hotspotPasswordController,
-          label: 'Nöbetix Şifresi',
-          icon: Icons.lock,
-          isPassword: true,
-        ),
-
-        const SizedBox(height: 20),
-
-        _buildActionButton(
-          text: 'NÖBETİX EKRAN\'A BAĞLAN',
-          onPressed: _connectToHotspot,
-          isPressed: _isHotspotPressed,
-          onPressChanged: (pressed) =>
-              setState(() => _isHotspotPressed = pressed),
-        ),
-      ],
-    );
-  }
-
   Widget _buildWiFiSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -293,12 +170,59 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
         const SizedBox(height: 20),
 
         _buildActionButton(
-          text: 'NÖBETİX EKRAN\'I AĞA BAĞLA',
-          onPressed: _connectRPiToWiFi,
+          text: _isLoading ? 'GÜNCELLENİYOR...' : 'NÖBETİX EKRAN\'I AĞA BAĞLA',
+          onPressed: _isLoading ? () {} : _connectRPiToWiFi,
           isPressed: _isWiFiPressed,
           onPressChanged: (pressed) => setState(() => _isWiFiPressed = pressed),
         ),
+
+        const SizedBox(height: 24),
+
+        _buildInfoMessage(),
       ],
+    );
+  }
+
+  Widget _buildInfoMessage() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A3E).withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.1),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF3182CE).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(
+              Icons.info_outline,
+              color: Color(0xFF3182CE),
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              'Nöbetix Ekran Sistemi\'nin düzgün çalışabilmesi için internet bağlantısına ihtiyaç vardır. Lütfen yukarıdaki alanlara modeminizin ağ adını (SSID) ve şifresini girerek Nöbetix Ekran\'ın internet ağınıza bağlanmasını sağlayın.',
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                fontWeight: FontWeight.w400,
+                color: Colors.white.withValues(alpha: 0.8),
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -319,7 +243,7 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
       ),
       child: TextField(
         controller: controller,
-        obscureText: isPassword,
+        obscureText: isPassword && !_isPasswordVisible,
         style: GoogleFonts.inter(
           color: Colors.white,
           fontSize: 14,
@@ -336,6 +260,22 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
             color: Colors.white.withValues(alpha: 0.6),
             size: 20,
           ),
+          suffixIcon: isPassword
+              ? IconButton(
+                  icon: Icon(
+                    _isPasswordVisible
+                        ? Icons.visibility_off
+                        : Icons.visibility,
+                    color: Colors.white.withValues(alpha: 0.6),
+                    size: 20,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _isPasswordVisible = !_isPasswordVisible;
+                    });
+                  },
+                )
+              : null,
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 16,
@@ -400,34 +340,101 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
     );
   }
 
-  void _connectToHotspot() {
-    final ssid = hotspotSSIDController.text.trim();
+  // API: Mevcut network ayarlarını yükle
+  Future<void> _loadCurrentNetworkConfig() async {
+    setState(() {
+      _isLoading = true;
+    });
 
-    if (ssid.isEmpty) {
-      _showErrorFeedback('Lütfen SSID alanını doldurun.');
-      return;
+    try {
+      final response = await http
+          .get(
+            Uri.parse('http://192.168.4.1:3000/api/mobile/config/network'),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 10));
+
+      debugPrint('GET network config response status: ${response.statusCode}');
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        debugPrint('GET network config response data: $data');
+
+        if (data['success'] == true && data['network'] != null) {
+          final network = data['network'];
+          setState(() {
+            wifiSSIDController.text = network['ssid'] ?? '';
+            wifiPasswordController.text = network['password'] ?? '';
+          });
+          debugPrint('Network config loaded: SSID=${network['ssid']}');
+        }
+      }
+    } catch (e) {
+      debugPrint('Network config load error: $e');
+      // Hata durumunda kullanıcıya bilgi vermeyeceğiz, sessizce devam ederiz
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  // API: Network ayarlarını güncelle
+  Future<void> _updateNetworkConfig(String ssid, String password) async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    // PUT request'i gönder
+    try {
+      final response = await http
+          .put(
+            Uri.parse('http://192.168.4.1:3000/api/mobile/config/network'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'ssid': ssid, 'password': password}),
+          )
+          .timeout(const Duration(seconds: 5));
+
+      debugPrint('PUT network config response status: ${response.statusCode}');
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        debugPrint('PUT network config response data: $data');
+      }
+    } catch (e) {
+      debugPrint('PUT network config request error (normal): $e');
     }
 
-    // Mock başarılı bağlantı
+    // PUT başarılı olsun ya da olmasın, sistem restart kontrolüne geç
+    debugPrint('Starting network update system restart sequence...');
+
+    // Başarılı mesajı göster
     _showSuccessFeedback(
-      'Hotspot\'a Bağlanıldı',
-      'Ekranın hotspot\'ına başarıyla bağlanıldı',
+      'Sistem Yeniden Başlatılıyor',
+      'WiFi ayarları uygulanıyor, lütfen bekleyin...',
     );
+
+    // Sistem restart kontrolü
+    await _waitForSystemRestart();
   }
 
   void _connectRPiToWiFi() {
     final ssid = wifiSSIDController.text.trim();
+    final password = wifiPasswordController.text.trim();
 
+    // Validation
     if (ssid.isEmpty) {
       _showErrorFeedback('Lütfen SSID alanını doldurun.');
       return;
     }
 
-    // Mock başarılı bağlantı
-    _showSuccessFeedback(
-      'RPi Ağa Bağlandı',
-      'Raspberry Pi Wi-Fi ağına başarıyla bağlandı',
-    );
+    if (password.length < 8) {
+      _showErrorFeedback('WiFi şifresi en az 8 karakter olmalıdır.');
+      return;
+    }
+
+    // API çağrısını yap
+    _updateNetworkConfig(ssid, password);
   }
 
   void _showSuccessFeedback(String title, String subtitle) async {
@@ -502,6 +509,7 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
     required String title,
     required String subtitle,
     required Color backgroundColor,
+    bool autoHide = true, // Yeni parametre ekle
   }) {
     // Önceki toast varsa kaldır
     _removeActiveToast();
@@ -516,6 +524,7 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
         title: title,
         subtitle: subtitle,
         backgroundColor: backgroundColor,
+        autoHide: autoHide, // Parametre geç
         onDismiss: () {
           _removeActiveToast();
         },
@@ -523,5 +532,142 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
     );
 
     overlay.insert(_activeToastEntry!);
+  }
+
+  // Sistem restart bekle - Screen Settings'teki gibi aynı mantık
+  Future<void> _waitForSystemRestart() async {
+    debugPrint('Waiting for network system restart...');
+
+    // İlk 15 saniye bekle
+    _showCustomToast(
+      icon: Icons.sync,
+      iconColor: const Color(0xFF3182CE),
+      title: 'Sistem Başlatılıyor',
+      subtitle: 'WiFi ayarları uygulanıyor (15 saniye)...',
+      backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
+      autoHide: false,
+    );
+
+    debugPrint('Waiting 15 seconds for network system to restart...');
+    await Future.delayed(const Duration(seconds: 15));
+
+    // Sistem hazır olana kadar kontrol et
+    const maxAttempts = 30; // 30 * 2 saniye = 60 saniye max
+    int attempts = 0;
+
+    while (attempts < maxAttempts) {
+      if (!mounted) return;
+
+      attempts++;
+      debugPrint(
+        'Network system restart check attempt: $attempts/$maxAttempts',
+      );
+
+      // Hem hotspot hem WiFi kontrol et
+      bool isSystemReady = await _checkNetworkSystemAvailability();
+
+      if (isSystemReady) {
+        debugPrint('Network system is ready! Returning to home page.');
+
+        // Başarı mesajını göster ve 3 saniye tut
+        _showCustomToast(
+          icon: Icons.check_circle,
+          iconColor: const Color(0xFF38A169),
+          title: 'Sistem Hazır',
+          subtitle: 'Ana sayfaya dönülüyor...',
+          backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
+          autoHide: false,
+        );
+
+        // 3 saniye bekle, sonra ana sayfaya dön
+        await Future.delayed(const Duration(seconds: 3));
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+          _removeActiveToast();
+          Navigator.pop(context);
+        }
+        return;
+      }
+
+      // Her denemede toast'ı güncelle
+      if (mounted) {
+        _showCustomToast(
+          icon: Icons.sync,
+          iconColor: const Color(0xFF3182CE),
+          title: 'Sistem Başlatılıyor',
+          subtitle: 'Bağlantı kontrol ediliyor... ($attempts/$maxAttempts)',
+          backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
+          autoHide: false,
+        );
+      }
+
+      // 2 saniye bekle ve tekrar dene
+      await Future.delayed(const Duration(seconds: 2));
+    }
+
+    // Timeout durumu - hata mesajını göster ve 5 saniye tut
+    debugPrint(
+      'Network system restart timeout after ${maxAttempts * 2} seconds',
+    );
+    _showCustomToast(
+      icon: Icons.error_outline,
+      iconColor: const Color(0xFFE53E3E),
+      title: 'Zaman Aşımı',
+      subtitle: 'Sistem başlatma zaman aşımı. Ana sayfaya dönülüyor...',
+      backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
+      autoHide: false,
+    );
+
+    // 5 saniye bekle ve ana sayfaya dön
+    await Future.delayed(const Duration(seconds: 5));
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+      _removeActiveToast();
+      Navigator.pop(context);
+    }
+  }
+
+  // Network sistem hazır olup olmadığını kontrol et
+  Future<bool> _checkNetworkSystemAvailability() async {
+    try {
+      // Önce hotspot kontrol et
+      final hotspotResponse = await http
+          .get(
+            Uri.parse('http://192.168.4.1:3000/api/mobile/check'),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 3));
+
+      if (hotspotResponse.statusCode == 200) {
+        debugPrint('Network system available via hotspot');
+        return true;
+      }
+    } catch (e) {
+      debugPrint('Network hotspot check failed: $e');
+    }
+
+    try {
+      // WiFi ile kontrol et
+      final wifiResponse = await http
+          .get(
+            Uri.parse('http://raspberrypi.local:3000/api/mobile/check'),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 3));
+
+      if (wifiResponse.statusCode == 200) {
+        debugPrint('Network system available via WiFi');
+        return true;
+      }
+    } catch (e) {
+      debugPrint('Network WiFi check failed: $e');
+    }
+
+    debugPrint('Network system not available yet');
+    return false;
   }
 }

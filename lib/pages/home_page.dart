@@ -78,6 +78,87 @@ class _HomePageState extends State<HomePage> {
     _connectionService.startPeriodicCheck();
   }
 
+  void _quickConnectionCheck() async {
+    debugPrint('HomePage: Quick connection check after page return');
+
+    if (!mounted) return;
+
+    // Loading durumunu göster
+    setState(() {
+      _isCheckingConnection = true;
+    });
+
+    // System restart sonrası stream subscription restore et
+    debugPrint('HomePage: Force restoring stream subscription');
+    _statusSubscription?.cancel(); // Eski subscription'ı kapat
+    _statusSubscription = _connectionService.statusStream.listen((status) {
+      if (mounted) {
+        final previousStatus = _connectionStatus;
+        debugPrint(
+          'HomePage: Stream received status: ${status.isConnected ? 'Connected' : 'Disconnected'} (${status.type})',
+        );
+        setState(() {
+          _connectionStatus = status;
+          _isCheckingConnection = false;
+        });
+
+        // Sadece durum değiştiğinde toast göster
+        if (previousStatus != status) {
+          _showConnectionToast(status);
+        }
+      }
+    });
+
+    // System restart sonrası ekstra bekleme
+    await Future.delayed(const Duration(seconds: 2));
+
+    try {
+      // Hızlı bağlantı kontrolü
+      await _connectionService.checkConnection();
+      debugPrint('HomePage: Quick connection check successful');
+    } catch (e) {
+      debugPrint('Quick connection check failed: $e');
+      // Hata durumunda 3 saniye sonra tekrar dene
+      await Future.delayed(const Duration(seconds: 3));
+      if (mounted) {
+        try {
+          await _connectionService.checkConnection();
+          debugPrint('HomePage: Retry connection check successful');
+        } catch (retryError) {
+          debugPrint(
+            'HomePage: Retry connection check also failed: $retryError',
+          );
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCheckingConnection = false;
+        });
+      }
+    }
+
+    // Periyodik kontrolü de yeniden başlat
+    _connectionService.startPeriodicCheck();
+  }
+
+  void _stopConnectionServiceForRestart() {
+    debugPrint('HomePage: Stopping ConnectionService for system restart');
+
+    // ConnectionService'i durdur
+    _connectionService.stopPeriodicCheck();
+    _statusSubscription?.cancel();
+
+    // Toast'ları temizle
+    _removeActiveToast();
+
+    // Status'u manuel olarak güncelle (loading göstermemek için)
+    setState(() {
+      _connectionStatus = ConnectionStatus.disconnected();
+      _isCheckingConnection = false;
+    });
+  }
+
   void _showConnectionToast(ConnectionStatus status) {
     if (!mounted) return;
 
@@ -216,8 +297,8 @@ class _HomePageState extends State<HomePage> {
         // Sadece Wi-Fi & Ağ ve Ekran aktif
         return cardType == 'Wi-Fi & Ağ' || cardType == 'Ekran';
       case ConnectionType.wifi:
-        // Wi-Fi & Ağ hariç hepsi aktif
-        return cardType != 'Wi-Fi & Ağ';
+        // Ekran sadece hotspot'ta aktif, Wi-Fi & Ağ deaktif
+        return cardType != 'Wi-Fi & Ağ' && cardType != 'Ekran';
     }
   }
 
@@ -225,10 +306,13 @@ class _HomePageState extends State<HomePage> {
   String _getDisabledCardMessage(String cardType) {
     switch (_connectionStatus.type) {
       case ConnectionType.none:
-        return 'Nöbetix Panoya bağlanması gerekiyor';
+        return 'Nöbetix Panoya bağlanılması gerekiyor';
       case ConnectionType.hotspot:
-        return 'Nöbetix panoyu aynı modeme bağlaması gerekiyor';
+        return 'Nöbetix panonun aynı modeme bağlaması gerekiyor';
       case ConnectionType.wifi:
+        if (cardType == 'Ekran') {
+          return 'Ekran ayarları için Nöbetix panoya hotspot ile bağlanılması gerekiyor';
+        }
         return 'Bu ayarın yapılması için Nöbetix panoya hotspot ile bağlanılması gerekiyor';
     }
   }
@@ -631,15 +715,23 @@ class _HomePageState extends State<HomePage> {
         MaterialPageRoute(builder: (context) => const PharmacySettingsPage()),
       );
     } else if (cardType == 'Ekran') {
-      Navigator.push(
+      await Navigator.push(
         context,
-        MaterialPageRoute(builder: (context) => const ScreenSettingsPage()),
+        MaterialPageRoute(
+          builder: (context) => ScreenSettingsPage(
+            onSystemRestart: _stopConnectionServiceForRestart,
+          ),
+        ),
       );
+      // Screen settings'ten döndüğünde bağlantı kontrolü yap
+      _quickConnectionCheck();
     } else if (cardType == 'Wi-Fi & Ağ') {
-      Navigator.push(
+      await Navigator.push(
         context,
         MaterialPageRoute(builder: (context) => const WifiSettingsPage()),
       );
+      // WiFi settings'ten döndüğünde bağlantı kontrolü yap
+      _quickConnectionCheck();
     } else if (cardType == 'Medya') {
       Navigator.push(
         context,

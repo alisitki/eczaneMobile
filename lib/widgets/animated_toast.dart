@@ -10,6 +10,7 @@ class AnimatedToastOverlay extends StatelessWidget {
   final String subtitle;
   final Color backgroundColor;
   final VoidCallback onDismiss;
+  final bool autoHide; // Yeni parametre
 
   const AnimatedToastOverlay({
     super.key,
@@ -20,6 +21,7 @@ class AnimatedToastOverlay extends StatelessWidget {
     required this.subtitle,
     required this.backgroundColor,
     required this.onDismiss,
+    this.autoHide = true, // Varsayılan true
   });
 
   @override
@@ -38,6 +40,7 @@ class AnimatedToastOverlay extends StatelessWidget {
             title: title,
             subtitle: subtitle,
             backgroundColor: backgroundColor,
+            autoHide: autoHide, // Parametre geç
             onDismiss: onDismiss,
           ),
         ),
@@ -54,6 +57,7 @@ class AnimatedToast extends StatefulWidget {
   final String subtitle;
   final Color backgroundColor;
   final VoidCallback onDismiss;
+  final bool autoHide; // Yeni parametre
 
   const AnimatedToast({
     super.key,
@@ -63,6 +67,7 @@ class AnimatedToast extends StatefulWidget {
     required this.subtitle,
     required this.backgroundColor,
     required this.onDismiss,
+    this.autoHide = true, // Varsayılan true
   });
 
   @override
@@ -108,8 +113,10 @@ class _AnimatedToastState extends State<AnimatedToast>
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
 
-    // 3 sn sonra otomatik kapan
-    Future.delayed(const Duration(seconds: 3), _dismiss);
+    // Sadece autoHide true ise otomatik kapan
+    if (widget.autoHide) {
+      Future.delayed(const Duration(seconds: 3), _dismiss);
+    }
   }
 
   Future<void> _dismiss() async {

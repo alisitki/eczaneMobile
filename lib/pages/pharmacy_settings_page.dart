@@ -3,6 +3,9 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:vibration/vibration.dart';
+import 'dart:convert';
+import 'dart:io';
+import 'package:http/http.dart' as http;
 import '../widgets/animated_particles.dart';
 import '../widgets/animated_toast.dart';
 
@@ -26,8 +29,35 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
   OverlayEntry? _activeToastEntry;
 
   // Button press state
-  bool _isKaydetPressed = false;
   bool _isGuncellePressed = false;
+
+  // JSON verilerinden yüklenecek listeler
+  List<Map<String, String>> cityList = [];
+  List<Map<String, String>> districtList = [];
+  List<String> cities = [];
+  Map<String, List<String>> districts = {};
+
+  // API loading states
+  bool _isSavingConfig = false;
+
+  // Türkçe alfabetik sıralama için
+  String _turkishSort(String text) {
+    return text
+        .toLowerCase()
+        .replaceAll('ç', 'c_')
+        .replaceAll('ğ', 'g_')
+        .replaceAll('ı', 'i_')
+        .replaceAll('ö', 'o_')
+        .replaceAll('ş', 's_')
+        .replaceAll('ü', 'u_');
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCitiesAndDistricts();
+    _loadCurrentNobetciConfig();
+  }
 
   @override
   void dispose() {
@@ -43,21 +73,234 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
     }
   }
 
-  // Mock data - gerçek JSON'dan gelecek
-  final List<String> cities = [
-    'İstanbul',
-    'Ankara',
-    'İzmir',
-    'Bursa',
-    'Antalya',
-    'Adana',
-  ];
+  // JSON dosyalarından il ve ilçe verilerini yükle
+  Future<void> _loadCitiesAndDistricts() async {
+    try {
+      // İl verilerini yükle
+      final cityJsonString = await rootBundle.loadString('il.json');
+      final List<dynamic> cityJsonData = json.decode(cityJsonString);
 
-  final Map<String, List<String>> districts = {
-    'İstanbul': ['Kadıköy', 'Beşiktaş', 'Şişli', 'Bakırköy'],
-    'Ankara': ['Çankaya', 'Keçiören', 'Mamak', 'Etimesgut'],
-    'İzmir': ['Konak', 'Karşıyaka', 'Bornova', 'Buca'],
-  };
+      cityList = cityJsonData
+          .map(
+            (item) => {
+              'id': item['id'].toString(),
+              'name': item['name'].toString(),
+            },
+          )
+          .toList();
+
+      // İl listesini Türkçe alfabetik sıraya koy
+      cityList.sort(
+        (a, b) => _turkishSort(a['name']!).compareTo(_turkishSort(b['name']!)),
+      );
+      cities = cityList.map((city) => city['name']!).toList();
+
+      // İlçe verilerini yükle
+      final districtJsonString = await rootBundle.loadString('ilce.json');
+      final List<dynamic> districtJsonData = json.decode(districtJsonString);
+
+      districtList = districtJsonData
+          .map(
+            (item) => {
+              'id': item['id'].toString(),
+              'il_id': item['il_id'].toString(),
+              'name': item['name'].toString(),
+            },
+          )
+          .toList();
+
+      // İlçeleri il ID'sine göre grupla
+      districts = {};
+      for (var city in cityList) {
+        String cityId = city['id']!;
+        String cityName = city['name']!;
+
+        List<String> cityDistricts = districtList
+            .where((district) => district['il_id'] == cityId)
+            .map((district) => district['name']!)
+            .toList();
+
+        // İlçeleri Türkçe alfabetik sıraya koy
+        cityDistricts.sort(
+          (a, b) => _turkishSort(a).compareTo(_turkishSort(b)),
+        );
+        districts[cityName] = cityDistricts;
+      }
+
+      setState(() {});
+    } catch (e) {
+      // Hata durumunda varsayılan veri kullan
+      _loadDefaultData();
+    }
+  }
+
+  // Varsayılan veri yükleme (fallback)
+  void _loadDefaultData() {
+    cities = ['İstanbul', 'Ankara', 'İzmir', 'Bursa', 'Antalya', 'Adana'];
+
+    districts = {
+      'İstanbul': ['Kadıköy', 'Beşiktaş', 'Şişli', 'Bakırköy'],
+      'Ankara': ['Çankaya', 'Keçiören', 'Mamak', 'Etimesgut'],
+      'İzmir': ['Konak', 'Karşıyaka', 'Bornova', 'Buca'],
+    };
+
+    setState(() {});
+  }
+
+  // Mevcut nöbetçi eczane ayarlarını yükle
+  Future<void> _loadCurrentNobetciConfig() async {
+    try {
+      const hostname = 'raspberrypi.local';
+      const port = 3000;
+      const path = '/api/mobile/config/nobetci';
+
+      // mDNS ile hostname'i çözümle
+      String? resolvedIP;
+      try {
+        final lookupResult = await InternetAddress.lookup(hostname);
+        if (lookupResult.isNotEmpty) {
+          resolvedIP = lookupResult.first.address;
+        }
+      } catch (_) {
+        // mDNS başarısız olursa varsayılan IP'yi dene
+        resolvedIP = '192.168.1.13';
+      }
+
+      final url = 'http://$resolvedIP:$port$path';
+      final response = await http
+          .get(Uri.parse(url), headers: {'Content-Type': 'application/json'})
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true && data['nobetci'] != null) {
+          final config = data['nobetci'];
+
+          setState(() {
+            selectedCity = config['il']?.toString();
+            selectedDistrict = config['ilce']?.toString();
+
+            // İl dropdown'da var mı kontrol et (case-insensitive)
+            if (selectedCity != null) {
+              final cityMatch = cities.firstWhere(
+                (city) => city.toLowerCase() == selectedCity!.toLowerCase(),
+                orElse: () => '',
+              );
+              selectedCity = cityMatch.isEmpty ? null : cityMatch;
+            }
+
+            // İlçe dropdown'da var mı kontrol et (case-insensitive)
+            if (selectedDistrict != null && selectedCity != null) {
+              final cityDistricts = districts[selectedCity!] ?? [];
+              final districtMatch = cityDistricts.firstWhere(
+                (district) =>
+                    district.toLowerCase() == selectedDistrict!.toLowerCase(),
+                orElse: () => '',
+              );
+              selectedDistrict = districtMatch.isEmpty ? null : districtMatch;
+            }
+
+            // Saat formatını parse et (HH:mm)
+            if (config['dutyStart'] != null) {
+              final startParts = config['dutyStart'].toString().split(':');
+              if (startParts.length == 2) {
+                startTime = TimeOfDay(
+                  hour: int.parse(startParts[0]),
+                  minute: int.parse(startParts[1]),
+                );
+              }
+            }
+
+            if (config['dutyEnd'] != null) {
+              final endParts = config['dutyEnd'].toString().split(':');
+              if (endParts.length == 2) {
+                endTime = TimeOfDay(
+                  hour: int.parse(endParts[0]),
+                  minute: int.parse(endParts[1]),
+                );
+              }
+            }
+
+            saturdayDuty = config['saturdayDuty'] == true;
+            sundayDuty = config['sundayDuty'] == true;
+            todayIsMyDuty = config['todayOnDuty'] == true;
+          });
+        }
+      }
+    } catch (e) {
+      // Hata durumunda sessizce devam et
+    }
+  }
+
+  // Nöbetçi eczane ayarlarını güncelle
+  Future<void> _updateNobetciConfig() async {
+    if (selectedCity == null || selectedDistrict == null) {
+      _showErrorFeedback('Lütfen il ve ilçe seçimi yapın.');
+      return;
+    }
+
+    setState(() => _isSavingConfig = true);
+
+    try {
+      const hostname = 'raspberrypi.local';
+      const port = 3000;
+      const path = '/api/mobile/config/nobetci';
+
+      // mDNS ile hostname'i çözümle
+      String? resolvedIP;
+      try {
+        final lookupResult = await InternetAddress.lookup(hostname);
+        if (lookupResult.isNotEmpty) {
+          resolvedIP = lookupResult.first.address;
+        }
+      } catch (_) {
+        // mDNS başarısız olursa varsayılan IP'yi dene
+        resolvedIP = '192.168.1.13';
+      }
+
+      final url = 'http://$resolvedIP:$port$path';
+
+      final requestData = {
+        'il': selectedCity,
+        'ilce': selectedDistrict,
+        'dutyStart':
+            '${startTime.hour.toString().padLeft(2, '0')}:${startTime.minute.toString().padLeft(2, '0')}',
+        'dutyEnd':
+            '${endTime.hour.toString().padLeft(2, '0')}:${endTime.minute.toString().padLeft(2, '0')}',
+        'saturdayDuty': saturdayDuty,
+        'sundayDuty': sundayDuty,
+        'todayOnDuty': todayIsMyDuty,
+      };
+
+      final response = await http
+          .put(
+            Uri.parse(url),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode(requestData),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          _showSuccessFeedback(
+            'Ayarlar Kaydedildi',
+            'Nöbetçi eczane ayarları başarıyla güncellendi',
+          );
+        } else {
+          _showErrorFeedback('Ayarlar kaydedilemedi. Tekrar deneyin.');
+        }
+      } else {
+        _showErrorFeedback('Sunucu hatası: ${response.statusCode}');
+      }
+    } catch (e) {
+      _showErrorFeedback(
+        'Bağlantı hatası. İnternet bağlantınızı kontrol edin.',
+      );
+    } finally {
+      setState(() => _isSavingConfig = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -216,30 +459,13 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
 
                         const SizedBox(height: 40),
 
-                        // Butonlar
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _buildActionButton(
-                                text: 'KAYDET',
-                                onPressed: _saveSettings,
-                                isPressed: _isKaydetPressed,
-                                onPressChanged: (pressed) =>
-                                    setState(() => _isKaydetPressed = pressed),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: _buildActionButton(
-                                text: 'EKRANI\nGÜNCELLE',
-                                onPressed: _updateScreen,
-                                isPressed: _isGuncellePressed,
-                                onPressChanged: (pressed) => setState(
-                                  () => _isGuncellePressed = pressed,
-                                ),
-                              ),
-                            ),
-                          ],
+                        // Buton
+                        _buildActionButton(
+                          text: 'EKRANI GÜNCELLE',
+                          onPressed: _updateScreen,
+                          isPressed: _isGuncellePressed,
+                          onPressChanged: (pressed) =>
+                              setState(() => _isGuncellePressed = pressed),
                         ),
 
                         const SizedBox(height: 32),
@@ -289,7 +515,7 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          value: value,
+          value: enabled && items.contains(value) ? value : null,
           hint: Text(
             hint,
             style: GoogleFonts.inter(
@@ -668,30 +894,9 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
     }
   }
 
-  void _saveSettings() {
-    if (selectedCity == null || selectedDistrict == null) {
-      _showErrorFeedback('Lütfen il ve ilçe seçimi yapın.');
-      return;
-    }
-
-    // Burada ayarları kaydetme işlemi yapılacak
-    _showSuccessFeedback(
-      'Ayarlar Kaydedildi',
-      'Nöbetçi eczane ayarları başarıyla kaydedildi',
-    );
-  }
-
   void _updateScreen() {
-    if (selectedCity == null || selectedDistrict == null) {
-      _showErrorFeedback('Lütfen il ve ilçe seçimi yapın.');
-      return;
-    }
-
-    // Burada ekranı güncelleme işlemi yapılacak
-    _showSuccessFeedback(
-      'Ekran Güncellendi',
-      'Pano ekranı başarıyla güncellendi',
-    );
+    if (_isSavingConfig) return; // Zaten kaydetme işlemi devam ediyorsa
+    _updateNobetciConfig();
   }
 
   void _showSuccessFeedback(String title, String subtitle) async {

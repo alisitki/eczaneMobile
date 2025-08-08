@@ -100,7 +100,6 @@ class ConnectionService {
   ConnectionStatus _currentStatus = ConnectionStatus.disconnected();
   ConnectionStatus get currentStatus => _currentStatus;
 
-  //final String _wifiEndpoint = 'http://192.168.1.13:3000/api/mobile/check';
   final String _wifiEndpoint = 'http://raspberrypi.local:3000/api/mobile/check';
   final String _hotspotEndpoint = 'http://192.168.4.1:3000/api/mobile/check';
 
