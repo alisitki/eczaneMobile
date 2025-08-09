@@ -7,6 +7,7 @@ import 'dart:ui';
 import 'dart:convert';
 import '../widgets/animated_particles.dart';
 import '../widgets/animated_toast.dart';
+import '../services/connection_service.dart';
 
 class ScreenSettingsPage extends StatefulWidget {
   final VoidCallback? onSystemRestart;
@@ -20,6 +21,7 @@ class ScreenSettingsPage extends StatefulWidget {
 class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
   final TextEditingController _widthController = TextEditingController();
   final TextEditingController _heightController = TextEditingController();
+  final ConnectionService _connectionService = ConnectionService();
 
   // Yeni state variables
   String? _selectedModel;
@@ -37,7 +39,14 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
   void initState() {
     super.initState();
     _loadPresetData();
-    _loadCurrentScreenConfig();
+    // Sayfa açılışında biraz bekleyip sonra config'i yükle
+    _initializeScreenConfig();
+  }
+
+  Future<void> _initializeScreenConfig() async {
+    // ConnectionService'in hazır olması için biraz bekle
+    await Future.delayed(const Duration(milliseconds: 500));
+    await _loadCurrentScreenConfig();
   }
 
   void _loadPresetData() {
@@ -77,6 +86,58 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
         ],
       },
     ];
+  }
+
+  // Bağlantı türüne göre API base URL'ini döndüren helper method
+  Future<String> _getApiBaseUrl() async {
+    // Önce fresh bir bağlantı kontrolü yap
+    try {
+      await _connectionService.checkConnection();
+    } catch (e) {
+      debugPrint('Connection check failed in screen settings: $e');
+    }
+
+    final connectionStatus = _connectionService.currentStatus;
+    debugPrint(
+      'Current connection status: ${connectionStatus.type}, isConnected: ${connectionStatus.isConnected}',
+    );
+
+    switch (connectionStatus.type) {
+      case ConnectionType.wifi:
+        // WiFi için önce ConnectionService'in cache'lenmiş IP'sini kontrol et
+        final cachedIP = _connectionService.cachedHostnameIP;
+        if (cachedIP != null && cachedIP.isNotEmpty) {
+          debugPrint('Using cached IP from ConnectionService: $cachedIP');
+          return 'http://$cachedIP:3000';
+        }
+
+        // Cached IP yoksa ClientIP kontrol et
+        if (connectionStatus.clientIP != null &&
+            connectionStatus.clientIP!.isNotEmpty &&
+            connectionStatus.clientIP != ':') {
+          // ConnectionService'in başarıyla çözümlediği IP'yi kullan
+          final parts = connectionStatus.clientIP!.split(':');
+          if (parts.isNotEmpty && parts.first.isNotEmpty) {
+            final resolvedIP = parts.first;
+            debugPrint('Using resolved IP from ConnectionService: $resolvedIP');
+            return 'http://$resolvedIP:3000';
+          }
+        }
+
+        // Fallback olarak hostname kullan
+        debugPrint('No valid resolved IP found, using hostname');
+        return 'http://raspberrypi.local:3000';
+
+      case ConnectionType.hotspot:
+        // Hotspot için direkt IP kullan
+        debugPrint('Using hotspot IP: 192.168.4.1');
+        return 'http://192.168.4.1:3000';
+
+      case ConnectionType.none:
+        // Bağlantı yok ama yine de hotspot IP'yi dene
+        debugPrint('No connection, trying hotspot IP as fallback');
+        return 'http://192.168.4.1:3000';
+    }
   }
 
   @override
@@ -684,9 +745,10 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
     });
 
     try {
+      final baseUrl = await _getApiBaseUrl();
       final response = await http
           .get(
-            Uri.parse('http://192.168.4.1:3000/api/mobile/config/screen'),
+            Uri.parse('$baseUrl/api/mobile/config/screen'),
             headers: {'Content-Type': 'application/json'},
           )
           .timeout(const Duration(seconds: 5));
@@ -723,188 +785,41 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
       _isLoading = true;
     });
 
-    // PUT request'i gönder (sonucu önemli değil)
     try {
+      final baseUrl = await _getApiBaseUrl();
       final response = await http
           .put(
-            Uri.parse('http://192.168.4.1:3000/api/mobile/config/screen'),
+            Uri.parse('$baseUrl/api/mobile/config/screen'),
             headers: {'Content-Type': 'application/json'},
             body: json.encode({'width': width, 'height': height}),
           )
           .timeout(const Duration(seconds: 5));
 
       debugPrint('PUT response status: ${response.statusCode}');
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         debugPrint('PUT response data: $data');
+
+        // Başarılı güncelleme
+        _showSuccessFeedback('Başarılı', 'Ekran ayarları güncellendi');
+      } else {
+        // API hatası
+        _showErrorFeedback('Sunucu hatası: ${response.statusCode}');
       }
     } catch (e) {
-      debugPrint('PUT request error (normal): $e');
+      debugPrint('PUT request error: $e');
+      _showErrorFeedback('Bağlantı hatası: Ayarlar güncellenemedi');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
-
-    // PUT başarılı olsun ya da olmasın, sistem restart kontrolüne geç
-    debugPrint('Starting system restart sequence...');
-
-    // ConnectionService'i durdur (home page'de)
-    widget.onSystemRestart?.call();
-
-    // Başarılı mesajı göster
-    _showSuccessFeedback(
-      'Sistem Yeniden Başlatılıyor',
-      'Ayarlar uygulanıyor, lütfen bekleyin...',
-    );
-
-    // Sistem restart kontrolü - hem hotspot hem WiFi kontrol et
-    // Loading'i burada kapatmayacağız, _waitForSystemRestart içinde kapatılacak
-    await _waitForSystemRestart();
   }
 
   // Sistem restart kontrolü - hem hotspot hem WiFi kontrol et
-  Future<void> _waitForSystemRestart() async {
-    debugPrint('Waiting for system restart...');
-
-    // Toast mesajını göster ve 15 saniye boyunca tut
-    _showCustomToast(
-      icon: Icons.sync,
-      iconColor: const Color(0xFF3182CE),
-      title: 'Sistem Başlatılıyor',
-      subtitle: 'Sistem yeniden başlatılıyor...',
-      backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
-      autoHide: false, // Otomatik kapanmasın
-    );
-
-    // İlk 15 saniye bekle - sistem restart olması için
-    debugPrint('Waiting 15 seconds for system to restart...');
-    await Future.delayed(const Duration(seconds: 15));
-
-    // Toast mesajını güncelle ve kontroller bitene kadar tut
-    _showCustomToast(
-      icon: Icons.sync,
-      iconColor: const Color(0xFF3182CE),
-      title: 'Sistem Başlatılıyor',
-      subtitle: 'Bağlantı kontrol ediliyor...',
-      backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
-      autoHide: false, // Otomatik kapanmasın
-    );
-
-    const maxAttempts = 30; // 30 * 2 saniye = 60 saniye max
-    int attempts = 0;
-
-    while (attempts < maxAttempts) {
-      if (!mounted) return;
-
-      attempts++;
-      debugPrint('System restart check attempt: $attempts/$maxAttempts');
-
-      // Hem hotspot hem WiFi kontrol et
-      bool isSystemReady = await _checkSystemAvailability();
-
-      if (isSystemReady) {
-        debugPrint('System is ready! Returning to home page.');
-
-        // Başarı mesajını göster ve 3 saniye tut
-        _showCustomToast(
-          icon: Icons.check_circle,
-          iconColor: const Color(0xFF38A169),
-          title: 'Sistem Hazır',
-          subtitle: 'Ana sayfaya dönülüyor...',
-          backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
-          autoHide: false, // Manuel kontrol
-        );
-
-        // 3 saniye bekle, sonra ana sayfaya dön
-        await Future.delayed(const Duration(seconds: 3));
-        if (mounted) {
-          setState(() {
-            _isLoading = false;
-          });
-          // Toast'ı temizle
-          _removeActiveToast();
-          Navigator.pop(context);
-        }
-        return;
-      }
-
-      // Her denemede toast'ı güncelle
-      if (mounted) {
-        _showCustomToast(
-          icon: Icons.sync,
-          iconColor: const Color(0xFF3182CE),
-          title: 'Sistem Başlatılıyor',
-          subtitle: 'Bağlantı kontrol ediliyor... ($attempts/$maxAttempts)',
-          backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
-          autoHide: false, // Otomatik kapanmasın
-        );
-      }
-
-      // 2 saniye bekle ve tekrar dene
-      await Future.delayed(const Duration(seconds: 2));
-    }
-
-    // Timeout durumu - hata mesajını göster ve 5 saniye tut
-    debugPrint('System restart timeout after ${maxAttempts * 2} seconds');
-    _showCustomToast(
-      icon: Icons.error_outline,
-      iconColor: const Color(0xFFE53E3E),
-      title: 'Zaman Aşımı',
-      subtitle: 'Sistem başlatma zaman aşımı. Ana sayfaya dönülüyor...',
-      backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
-      autoHide: false, // Manuel kontrol
-    );
-
-    // 5 saniye bekle ve ana sayfaya dön
-    await Future.delayed(const Duration(seconds: 5));
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
-      // Toast'ı temizle
-      _removeActiveToast();
-      Navigator.pop(context);
-    }
-  }
-
-  // Sistem hazır olup olmadığını kontrol et (hem hotspot hem WiFi)
-  Future<bool> _checkSystemAvailability() async {
-    try {
-      // Önce hotspot kontrol et
-      final hotspotResponse = await http
-          .get(
-            Uri.parse('http://192.168.4.1:3000/api/mobile/check'),
-            headers: {'Content-Type': 'application/json'},
-          )
-          .timeout(const Duration(seconds: 3));
-
-      if (hotspotResponse.statusCode == 200) {
-        debugPrint('System available via hotspot');
-        return true;
-      }
-    } catch (e) {
-      debugPrint('Hotspot check failed: $e');
-    }
-
-    try {
-      // WiFi ile kontrol et (mDNS ile çözümlenmiş IP veya varsayılan)
-      // ConnectionService'teki gibi mDNS resolution yapabiliriz
-      final wifiResponse = await http
-          .get(
-            Uri.parse('http://raspberrypi.local:3000/api/mobile/check'),
-            headers: {'Content-Type': 'application/json'},
-          )
-          .timeout(const Duration(seconds: 3));
-
-      if (wifiResponse.statusCode == 200) {
-        debugPrint('System available via WiFi');
-        return true;
-      }
-    } catch (e) {
-      debugPrint('WiFi check failed: $e');
-    }
-
-    debugPrint('System not available yet');
-    return false;
-  }
-
   void _updateScreen() {
     String widthStr = _widthController.text.trim();
     String heightStr = _heightController.text.trim();

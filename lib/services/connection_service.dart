@@ -100,6 +100,17 @@ class ConnectionService {
   ConnectionStatus _currentStatus = ConnectionStatus.disconnected();
   ConnectionStatus get currentStatus => _currentStatus;
 
+  // Cache'lenmiş IP'yi döndüren getter
+  String? get cachedHostnameIP => _cachedHostnameIP;
+
+  // Belirli bir hostname için cache'lenmiş IP'yi döndür
+  String? getCachedHostnameIP(String hostname) {
+    if (hostname.contains('raspberrypi.local')) {
+      return _cachedHostnameIP;
+    }
+    return null;
+  }
+
   final String _wifiEndpoint = 'http://raspberrypi.local:3000/api/mobile/check';
   final String _hotspotEndpoint = 'http://192.168.4.1:3000/api/mobile/check';
 

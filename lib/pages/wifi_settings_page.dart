@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../widgets/animated_particles.dart';
 import '../widgets/animated_toast.dart';
+import '../services/connection_service.dart';
 
 class WifiSettingsPage extends StatefulWidget {
   const WifiSettingsPage({super.key});
@@ -18,6 +19,7 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
   // Form controllers
   final TextEditingController wifiSSIDController = TextEditingController();
   final TextEditingController wifiPasswordController = TextEditingController();
+  final ConnectionService _connectionService = ConnectionService();
 
   // Aktif toast'ları takip etmek için
   OverlayEntry? _activeToastEntry;
@@ -46,6 +48,32 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
     if (_activeToastEntry != null) {
       _activeToastEntry!.remove();
       _activeToastEntry = null;
+    }
+  }
+
+  // Bağlantı türüne göre API base URL'ini döndüren helper method
+  Future<String> _getApiBaseUrl() async {
+    try {
+      await _connectionService.checkConnection();
+    } catch (e) {
+      debugPrint('Connection check failed in wifi settings: $e');
+    }
+
+    final connectionStatus = _connectionService.currentStatus;
+
+    switch (connectionStatus.type) {
+      case ConnectionType.wifi:
+        final cachedIP = _connectionService.getCachedHostnameIP(
+          'raspberrypi.local',
+        );
+        if (cachedIP != null && cachedIP.isNotEmpty) {
+          return 'http://$cachedIP:3000';
+        }
+        return 'http://raspberrypi.local:3000';
+
+      case ConnectionType.hotspot:
+      case ConnectionType.none:
+        return 'http://192.168.4.1:3000';
     }
   }
 
@@ -347,9 +375,10 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
     });
 
     try {
+      final baseUrl = await _getApiBaseUrl();
       final response = await http
           .get(
-            Uri.parse('http://192.168.4.1:3000/api/mobile/config/network'),
+            Uri.parse('$baseUrl/api/mobile/config/network'),
             headers: {'Content-Type': 'application/json'},
           )
           .timeout(const Duration(seconds: 10));
@@ -388,9 +417,10 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
 
     // PUT request'i gönder
     try {
+      final baseUrl = await _getApiBaseUrl();
       final response = await http
           .put(
-            Uri.parse('http://192.168.4.1:3000/api/mobile/config/network'),
+            Uri.parse('$baseUrl/api/mobile/config/network'),
             headers: {'Content-Type': 'application/json'},
             body: json.encode({'ssid': ssid, 'password': password}),
           )
@@ -400,22 +430,34 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         debugPrint('PUT network config response data: $data');
+
+        // Başarılı mesajı göster
+        _showSuccessFeedback(
+          'WiFi Ayarları Güncellendi',
+          'Ayarlar başarıyla kaydedildi',
+        );
+
+        // Loading'i kapat
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+        return;
+      } else {
+        _showErrorFeedback('WiFi ayarları güncellenemedi');
       }
     } catch (e) {
-      debugPrint('PUT network config request error (normal): $e');
+      debugPrint('PUT network config request error: $e');
+      _showErrorFeedback('Nöbetix panoya bağlantı kurulamadı');
     }
 
-    // PUT başarılı olsun ya da olmasın, sistem restart kontrolüne geç
-    debugPrint('Starting network update system restart sequence...');
-
-    // Başarılı mesajı göster
-    _showSuccessFeedback(
-      'Sistem Yeniden Başlatılıyor',
-      'WiFi ayarları uygulanıyor, lütfen bekleyin...',
-    );
-
-    // Sistem restart kontrolü
-    await _waitForSystemRestart();
+    // Loading'i kapat
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   void _connectRPiToWiFi() {
@@ -532,142 +574,5 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
     );
 
     overlay.insert(_activeToastEntry!);
-  }
-
-  // Sistem restart bekle - Screen Settings'teki gibi aynı mantık
-  Future<void> _waitForSystemRestart() async {
-    debugPrint('Waiting for network system restart...');
-
-    // İlk 15 saniye bekle
-    _showCustomToast(
-      icon: Icons.sync,
-      iconColor: const Color(0xFF3182CE),
-      title: 'Sistem Başlatılıyor',
-      subtitle: 'WiFi ayarları uygulanıyor (15 saniye)...',
-      backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
-      autoHide: false,
-    );
-
-    debugPrint('Waiting 15 seconds for network system to restart...');
-    await Future.delayed(const Duration(seconds: 15));
-
-    // Sistem hazır olana kadar kontrol et
-    const maxAttempts = 30; // 30 * 2 saniye = 60 saniye max
-    int attempts = 0;
-
-    while (attempts < maxAttempts) {
-      if (!mounted) return;
-
-      attempts++;
-      debugPrint(
-        'Network system restart check attempt: $attempts/$maxAttempts',
-      );
-
-      // Hem hotspot hem WiFi kontrol et
-      bool isSystemReady = await _checkNetworkSystemAvailability();
-
-      if (isSystemReady) {
-        debugPrint('Network system is ready! Returning to home page.');
-
-        // Başarı mesajını göster ve 3 saniye tut
-        _showCustomToast(
-          icon: Icons.check_circle,
-          iconColor: const Color(0xFF38A169),
-          title: 'Sistem Hazır',
-          subtitle: 'Ana sayfaya dönülüyor...',
-          backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
-          autoHide: false,
-        );
-
-        // 3 saniye bekle, sonra ana sayfaya dön
-        await Future.delayed(const Duration(seconds: 3));
-        if (mounted) {
-          setState(() {
-            _isLoading = false;
-          });
-          _removeActiveToast();
-          Navigator.pop(context);
-        }
-        return;
-      }
-
-      // Her denemede toast'ı güncelle
-      if (mounted) {
-        _showCustomToast(
-          icon: Icons.sync,
-          iconColor: const Color(0xFF3182CE),
-          title: 'Sistem Başlatılıyor',
-          subtitle: 'Bağlantı kontrol ediliyor... ($attempts/$maxAttempts)',
-          backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
-          autoHide: false,
-        );
-      }
-
-      // 2 saniye bekle ve tekrar dene
-      await Future.delayed(const Duration(seconds: 2));
-    }
-
-    // Timeout durumu - hata mesajını göster ve 5 saniye tut
-    debugPrint(
-      'Network system restart timeout after ${maxAttempts * 2} seconds',
-    );
-    _showCustomToast(
-      icon: Icons.error_outline,
-      iconColor: const Color(0xFFE53E3E),
-      title: 'Zaman Aşımı',
-      subtitle: 'Sistem başlatma zaman aşımı. Ana sayfaya dönülüyor...',
-      backgroundColor: const Color(0xFF1a1a2e).withValues(alpha: 0.95),
-      autoHide: false,
-    );
-
-    // 5 saniye bekle ve ana sayfaya dön
-    await Future.delayed(const Duration(seconds: 5));
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
-      _removeActiveToast();
-      Navigator.pop(context);
-    }
-  }
-
-  // Network sistem hazır olup olmadığını kontrol et
-  Future<bool> _checkNetworkSystemAvailability() async {
-    try {
-      // Önce hotspot kontrol et
-      final hotspotResponse = await http
-          .get(
-            Uri.parse('http://192.168.4.1:3000/api/mobile/check'),
-            headers: {'Content-Type': 'application/json'},
-          )
-          .timeout(const Duration(seconds: 3));
-
-      if (hotspotResponse.statusCode == 200) {
-        debugPrint('Network system available via hotspot');
-        return true;
-      }
-    } catch (e) {
-      debugPrint('Network hotspot check failed: $e');
-    }
-
-    try {
-      // WiFi ile kontrol et
-      final wifiResponse = await http
-          .get(
-            Uri.parse('http://raspberrypi.local:3000/api/mobile/check'),
-            headers: {'Content-Type': 'application/json'},
-          )
-          .timeout(const Duration(seconds: 3));
-
-      if (wifiResponse.statusCode == 200) {
-        debugPrint('Network system available via WiFi');
-        return true;
-      }
-    } catch (e) {
-      debugPrint('Network WiFi check failed: $e');
-    }
-
-    debugPrint('Network system not available yet');
-    return false;
   }
 }

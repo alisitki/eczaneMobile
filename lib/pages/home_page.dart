@@ -74,8 +74,8 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
-    // Periyodik kontrolü başlat
-    _connectionService.startPeriodicCheck();
+    // Periyodik kontrolü başlatmıyoruz - sadece açılışta kontrol
+    // _connectionService.startPeriodicCheck();
   }
 
   void _quickConnectionCheck() async {
@@ -288,33 +288,10 @@ class _HomePageState extends State<HomePage> {
         : const Color(0xFFE53E3E);
   }
 
-  // Kartın aktif olup olmadığını kontrol eden method
+  // Kartların görsel durumunu kontrol eden method (her zaman aktif görünecek)
   bool _isCardEnabled(String cardType) {
-    switch (_connectionStatus.type) {
-      case ConnectionType.none:
-        return false; // Tüm kartlar deaktif
-      case ConnectionType.hotspot:
-        // Sadece Wi-Fi & Ağ ve Ekran aktif
-        return cardType == 'Wi-Fi & Ağ' || cardType == 'Ekran';
-      case ConnectionType.wifi:
-        // Ekran sadece hotspot'ta aktif, Wi-Fi & Ağ deaktif
-        return cardType != 'Wi-Fi & Ağ' && cardType != 'Ekran';
-    }
-  }
-
-  // Deaktif kartlar için uyarı mesajını döndüren method
-  String _getDisabledCardMessage(String cardType) {
-    switch (_connectionStatus.type) {
-      case ConnectionType.none:
-        return 'Nöbetix Panoya bağlanılması gerekiyor';
-      case ConnectionType.hotspot:
-        return 'Nöbetix panonun aynı modeme bağlaması gerekiyor';
-      case ConnectionType.wifi:
-        if (cardType == 'Ekran') {
-          return 'Ekran ayarları için Nöbetix panoya hotspot ile bağlanılması gerekiyor';
-        }
-        return 'Bu ayarın yapılması için Nöbetix panoya hotspot ile bağlanılması gerekiyor';
-    }
+    // Artık tüm kartlar her zaman görsel olarak aktif
+    return true;
   }
 
   void _handleManualConnectionCheck() async {
@@ -693,22 +670,49 @@ class _HomePageState extends State<HomePage> {
     // Context hala geçerliyse devam et
     if (!context.mounted) return;
 
-    // Kartın aktif olup olmadığını kontrol et
-    final isEnabled = _isCardEnabled(cardType);
+    // Card tıklandığında bağlantı kontrolü yap
+    setState(() {
+      _isCheckingConnection = true;
+    });
 
-    if (!isEnabled) {
-      // Deaktif kart için uyarı göster
+    try {
+      await _connectionService.checkConnection();
+      // Bağlantı kontrolü sonucunun gelmesini bekle
+      await Future.delayed(const Duration(milliseconds: 500));
+    } catch (e) {
+      debugPrint('Card tap connection check failed: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCheckingConnection = false;
+        });
+      }
+    }
+
+    // Bağlantı kontrolü sonrası durumu kontrol et
+    if (!_connectionStatus.isConnected) {
+      // Bağlantı yoksa titreşim + uyarı göster
+      try {
+        final hasVibrator = await Vibration.hasVibrator();
+        if (hasVibrator == true) {
+          // Hata titreşimi - daha uzun ve keskin
+          await Vibration.vibrate(duration: 200);
+        }
+      } catch (e) {
+        // Vibration hatası durumunda sessizce devam et
+      }
+
       _showToast(
-        icon: Icons.warning,
-        iconColor: const Color(0xFFF59E0B),
-        title: 'Erişim Kısıtlı',
-        subtitle: _getDisabledCardMessage(cardType),
-        backgroundColor: const Color(0xFFF59E0B),
+        icon: Icons.wifi_off,
+        iconColor: const Color(0xFFE53E3E),
+        title: 'Bağlantı Hatası',
+        subtitle: 'Nöbetix Panoya bağlanılması gerekiyor',
+        backgroundColor: const Color(0xFFE53E3E),
       );
       return;
     }
 
-    // Aktif kartlar için normal navigasyon
+    // Bağlantı varsa normal navigasyon
     if (cardType == 'Nöbetçi Eczane') {
       Navigator.push(
         context,
@@ -717,21 +721,17 @@ class _HomePageState extends State<HomePage> {
     } else if (cardType == 'Ekran') {
       await Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (context) => ScreenSettingsPage(
-            onSystemRestart: _stopConnectionServiceForRestart,
-          ),
-        ),
+        MaterialPageRoute(builder: (context) => const ScreenSettingsPage()),
       );
-      // Screen settings'ten döndüğünde bağlantı kontrolü yap
-      _quickConnectionCheck();
+      // Artık sayfa dönüşlerinde otomatik kontrol yapmıyoruz
+      // _quickConnectionCheck();
     } else if (cardType == 'Wi-Fi & Ağ') {
       await Navigator.push(
         context,
         MaterialPageRoute(builder: (context) => const WifiSettingsPage()),
       );
-      // WiFi settings'ten döndüğünde bağlantı kontrolü yap
-      _quickConnectionCheck();
+      // Artık sayfa dönüşlerinde otomatik kontrol yapmıyoruz
+      // _quickConnectionCheck();
     } else if (cardType == 'Medya') {
       Navigator.push(
         context,
