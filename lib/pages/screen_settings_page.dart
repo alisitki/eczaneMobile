@@ -34,19 +34,25 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
   OverlayEntry? _activeToastEntry;
   bool _isGuncellePressed = false;
   bool _isLoading = false;
+  bool _isConfigLoading = false;
 
   @override
   void initState() {
     super.initState();
     _loadPresetData();
-    // Sayfa açılışında biraz bekleyip sonra config'i yükle
-    _initializeScreenConfig();
+    // İlk açılışta backend'den ayarları çekerken overlay göster
+    _startInitialLoad();
   }
 
-  Future<void> _initializeScreenConfig() async {
-    // ConnectionService'in hazır olması için biraz bekle
-    await Future.delayed(const Duration(milliseconds: 500));
-    await _loadCurrentScreenConfig();
+  Future<void> _startInitialLoad() async {
+    setState(() => _isConfigLoading = true);
+    try {
+      // ConnectionService'in hazır olması için biraz bekle
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _loadCurrentScreenConfig(initialLoad: true);
+    } finally {
+      if (mounted) setState(() => _isConfigLoading = false);
+    }
   }
 
   void _loadPresetData() {
@@ -323,6 +329,45 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
               ],
             ),
           ),
+          // İlk yükleme overlay'i
+          if (_isConfigLoading)
+            Positioned.fill(
+              child: ClipRRect(
+                borderRadius: BorderRadius.zero,
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  child: Container(
+                    color: Colors.black.withValues(alpha: 0.35),
+                    alignment: Alignment.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(
+                          width: 28,
+                          height: 28,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.8,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Ayarlar yükleniyor... ',
+                          style: GoogleFonts.inter(
+                            color: Colors.white.withValues(alpha: 0.9),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -739,10 +784,12 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
   }
 
   // API: Mevcut ekran ayarlarını yükle
-  Future<void> _loadCurrentScreenConfig() async {
-    setState(() {
-      _isLoading = true;
-    });
+  Future<void> _loadCurrentScreenConfig({bool initialLoad = false}) async {
+    if (!initialLoad) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
 
     try {
       final baseUrl = await _getApiBaseUrl();
@@ -771,7 +818,7 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
       debugPrint('Load screen config error: $e');
       _showErrorFeedback('Nöbetix panoya bağlantı kurulamadı');
     } finally {
-      if (mounted) {
+      if (mounted && !initialLoad) {
         setState(() {
           _isLoading = false;
         });

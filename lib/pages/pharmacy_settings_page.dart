@@ -4,10 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:vibration/vibration.dart';
 import 'dart:convert';
-import 'dart:io';
+// import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../widgets/animated_particles.dart';
 import '../widgets/animated_toast.dart';
+import '../services/connection_service.dart';
 
 class PharmacySettingsPage extends StatefulWidget {
   const PharmacySettingsPage({super.key});
@@ -17,13 +18,13 @@ class PharmacySettingsPage extends StatefulWidget {
 }
 
 class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
+  final ConnectionService _connectionService = ConnectionService();
   String? selectedCity;
   String? selectedDistrict;
   TimeOfDay startTime = const TimeOfDay(hour: 19, minute: 0);
   TimeOfDay endTime = const TimeOfDay(hour: 8, minute: 0);
   bool saturdayDuty = false;
   bool sundayDuty = false;
-  bool todayIsMyDuty = false;
 
   // Aktif toast'ları takip etmek için
   OverlayEntry? _activeToastEntry;
@@ -39,6 +40,11 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
 
   // API loading states
   bool _isSavingConfig = false;
+  bool _isMarkingToday = false;
+  bool _isTodayButtonPressed = false;
+  bool _isUnmarkingToday = false;
+  bool _isTodayOffButtonPressed = false;
+  bool _isConfigLoading = false;
 
   // Türkçe alfabetik sıralama için
   String _turkishSort(String text) {
@@ -55,8 +61,7 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
   @override
   void initState() {
     super.initState();
-    _loadCitiesAndDistricts();
-    _loadCurrentNobetciConfig();
+    _initializeData();
   }
 
   @override
@@ -71,6 +76,46 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
       _activeToastEntry!.remove();
       _activeToastEntry = null;
     }
+  }
+
+  Future<void> _initializeData() async {
+    // Şehir/ilçe + konfigürasyon yükleme boyunca overlay göstermek için
+    if (mounted) setState(() => _isConfigLoading = true);
+    try {
+      // Önce şehir/ilçe listelerini yükle, ardından backend config'i çek
+      await _loadCitiesAndDistricts();
+      // ConnectionService'in ilk durumunu hazırlamak için küçük bir gecikme
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
+      await _loadCurrentNobetciConfig();
+    } finally {
+      if (mounted) setState(() => _isConfigLoading = false);
+    }
+  }
+
+  Future<String> _getApiBaseUrl() async {
+    const hostname = 'raspberrypi.local';
+    // Güncel bağlantıyı kontrol et
+    try {
+      await _connectionService.checkConnection();
+    } catch (_) {
+      // sessiz geç
+    }
+
+    final status = _connectionService.currentStatus;
+
+    if (status.type == ConnectionType.wifi) {
+      // Önce cache'lenmiş/resolved IP'yi dene
+      final cached = _connectionService.getCachedHostnameIP(hostname);
+      if (cached != null && cached.isNotEmpty) {
+        return 'http://$cached:3000';
+      }
+      // Hostname fallback
+      return 'http://$hostname:3000';
+    }
+
+    // Hotspot ya da none: sabit IP
+    return 'http://192.168.4.1:3000';
   }
 
   // JSON dosyalarından il ve ilçe verilerini yükle
@@ -150,23 +195,9 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
   // Mevcut nöbetçi eczane ayarlarını yükle
   Future<void> _loadCurrentNobetciConfig() async {
     try {
-      const hostname = 'raspberrypi.local';
-      const port = 3000;
+      final baseUrl = await _getApiBaseUrl();
       const path = '/api/mobile/config/nobetci';
-
-      // mDNS ile hostname'i çözümle
-      String? resolvedIP;
-      try {
-        final lookupResult = await InternetAddress.lookup(hostname);
-        if (lookupResult.isNotEmpty) {
-          resolvedIP = lookupResult.first.address;
-        }
-      } catch (_) {
-        // mDNS başarısız olursa varsayılan IP'yi dene
-        resolvedIP = '192.168.1.13';
-      }
-
-      final url = 'http://$resolvedIP:$port$path';
+      final url = '$baseUrl$path';
       final response = await http
           .get(Uri.parse(url), headers: {'Content-Type': 'application/json'})
           .timeout(const Duration(seconds: 10));
@@ -223,7 +254,6 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
 
             saturdayDuty = config['saturdayDuty'] == true;
             sundayDuty = config['sundayDuty'] == true;
-            todayIsMyDuty = config['todayOnDuty'] == true;
           });
         }
       }
@@ -242,23 +272,9 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
     setState(() => _isSavingConfig = true);
 
     try {
-      const hostname = 'raspberrypi.local';
-      const port = 3000;
+      final baseUrl = await _getApiBaseUrl();
       const path = '/api/mobile/config/nobetci';
-
-      // mDNS ile hostname'i çözümle
-      String? resolvedIP;
-      try {
-        final lookupResult = await InternetAddress.lookup(hostname);
-        if (lookupResult.isNotEmpty) {
-          resolvedIP = lookupResult.first.address;
-        }
-      } catch (_) {
-        // mDNS başarısız olursa varsayılan IP'yi dene
-        resolvedIP = '192.168.1.13';
-      }
-
-      final url = 'http://$resolvedIP:$port$path';
+      final url = '$baseUrl$path';
 
       final requestData = {
         'il': selectedCity,
@@ -269,7 +285,6 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
             '${endTime.hour.toString().padLeft(2, '0')}:${endTime.minute.toString().padLeft(2, '0')}',
         'saturdayDuty': saturdayDuty,
         'sundayDuty': sundayDuty,
-        'todayOnDuty': todayIsMyDuty,
       };
 
       final response = await http
@@ -446,22 +461,37 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
 
                         const SizedBox(height: 32),
 
-                        // Bugün nöbetçi
-                        _buildCheckboxTile(
-                          title: 'Bugün Nöbetçi Benim',
-                          value: todayIsMyDuty,
-                          onChanged: (value) {
-                            setState(() {
-                              todayIsMyDuty = value!;
-                            });
-                          },
+                        // Bugün Nöbetçiyim / Değilim butonları
+                        _buildActionButton(
+                          text: _isMarkingToday
+                              ? 'İŞLENİYOR...'
+                              : 'BUGÜN NÖBETÇİYİM',
+                          onPressed: _isMarkingToday ? () {} : _markTodayOnDuty,
+                          isPressed: _isTodayButtonPressed,
+                          onPressChanged: (pressed) =>
+                              setState(() => _isTodayButtonPressed = pressed),
                         ),
 
-                        const SizedBox(height: 40),
+                        const SizedBox(height: 12),
 
-                        // Buton
                         _buildActionButton(
-                          text: 'EKRANI GÜNCELLE',
+                          text: _isUnmarkingToday
+                              ? 'İŞLENİYOR...'
+                              : 'BUGÜN NÖBETÇİ DEĞİLİM',
+                          onPressed: _isUnmarkingToday
+                              ? () {}
+                              : _unmarkTodayOnDuty,
+                          isPressed: _isTodayOffButtonPressed,
+                          onPressChanged: (pressed) => setState(
+                            () => _isTodayOffButtonPressed = pressed,
+                          ),
+                        ),
+
+                        const SizedBox(height: 24),
+
+                        // Ayarları Güncelle butonu
+                        _buildActionButton(
+                          text: 'NÖBET AYARLARINI GÜNCELLE',
                           onPressed: _updateScreen,
                           isPressed: _isGuncellePressed,
                           onPressChanged: (pressed) =>
@@ -476,6 +506,39 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
               ],
             ),
           ),
+          // Yükleme overlay'i - default değerlerin görünmesini engelle
+          if (_isConfigLoading)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.4),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(
+                        width: 28,
+                        height: 28,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 3,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Ayarlar yükleniyor...',
+                        style: GoogleFonts.inter(
+                          color: Colors.white.withValues(alpha: 0.9),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -897,6 +960,68 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
   void _updateScreen() {
     if (_isSavingConfig) return; // Zaten kaydetme işlemi devam ediyorsa
     _updateNobetciConfig();
+  }
+
+  Future<void> _markTodayOnDuty() async {
+    setState(() => _isMarkingToday = true);
+    try {
+      final baseUrl = await _getApiBaseUrl();
+      const path = '/api/mobile/nobetci/self-duty/activate';
+      final url = '$baseUrl$path';
+
+      final response = await http
+          .post(Uri.parse(url), headers: {'Content-Type': 'application/json'})
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          _showSuccessFeedback(
+            'İşlem Başarılı',
+            'Bugün nöbetçi olarak işaretlendi',
+          );
+        } else {
+          _showErrorFeedback('İşlem başarısız. Tekrar deneyin.');
+        }
+      } else {
+        _showErrorFeedback('Sunucu hatası: ${response.statusCode}');
+      }
+    } catch (e) {
+      _showErrorFeedback('Bağlantı hatası. Lütfen tekrar deneyin.');
+    } finally {
+      if (mounted) setState(() => _isMarkingToday = false);
+    }
+  }
+
+  Future<void> _unmarkTodayOnDuty() async {
+    setState(() => _isUnmarkingToday = true);
+    try {
+      final baseUrl = await _getApiBaseUrl();
+      const path = '/api/mobile/nobetci/self-duty/deactivate';
+      final url = '$baseUrl$path';
+
+      final response = await http
+          .post(Uri.parse(url), headers: {'Content-Type': 'application/json'})
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          _showSuccessFeedback(
+            'İşlem Başarılı',
+            'Bugün nöbetçi değil olarak işaretlendi',
+          );
+        } else {
+          _showErrorFeedback('İşlem başarısız. Tekrar deneyin.');
+        }
+      } else {
+        _showErrorFeedback('Sunucu hatası: ${response.statusCode}');
+      }
+    } catch (e) {
+      _showErrorFeedback('Bağlantı hatası. Lütfen tekrar deneyin.');
+    } finally {
+      if (mounted) setState(() => _isUnmarkingToday = false);
+    }
   }
 
   void _showSuccessFeedback(String title, String subtitle) async {

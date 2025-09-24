@@ -65,6 +65,8 @@ dependencies:
 
   # Vibration
   vibration: ^2.0.0
+  # File picker for selecting media files
+  file_picker: ^8.0.3
 
 dev_dependencies:
   flutter_test:

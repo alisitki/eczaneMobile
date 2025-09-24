@@ -28,11 +28,21 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
   bool _isWiFiPressed = false;
   bool _isLoading = false;
   bool _isPasswordVisible = false; // Şifre görünürlük kontrolü
+  bool _isConfigLoading = false; // İlk yükleme sırasında overlay
 
   @override
   void initState() {
     super.initState();
-    _loadCurrentNetworkConfig();
+    _startInitialLoad();
+  }
+
+  Future<void> _startInitialLoad() async {
+    setState(() => _isConfigLoading = true);
+    try {
+      await _loadCurrentNetworkConfig(initialLoad: true);
+    } finally {
+      if (mounted) setState(() => _isConfigLoading = false);
+    }
   }
 
   @override
@@ -155,6 +165,37 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
               ],
             ),
           ),
+          // İlk yükleme overlay'i
+          if (_isConfigLoading)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.35),
+                alignment: Alignment.center,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.8,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Ayarlar yükleniyor... ',
+                      style: GoogleFonts.inter(
+                        color: Colors.white.withValues(alpha: 0.9),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -369,10 +410,12 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
   }
 
   // API: Mevcut network ayarlarını yükle
-  Future<void> _loadCurrentNetworkConfig() async {
-    setState(() {
-      _isLoading = true;
-    });
+  Future<void> _loadCurrentNetworkConfig({bool initialLoad = false}) async {
+    if (!initialLoad) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
 
     try {
       final baseUrl = await _getApiBaseUrl();
@@ -401,7 +444,7 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
       debugPrint('Network config load error: $e');
       // Hata durumunda kullanıcıya bilgi vermeyeceğiz, sessizce devam ederiz
     } finally {
-      if (mounted) {
+      if (mounted && !initialLoad) {
         setState(() {
           _isLoading = false;
         });
