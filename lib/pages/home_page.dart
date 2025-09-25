@@ -78,87 +78,6 @@ class _HomePageState extends State<HomePage> {
     // _connectionService.startPeriodicCheck();
   }
 
-  void _quickConnectionCheck() async {
-    debugPrint('HomePage: Quick connection check after page return');
-
-    if (!mounted) return;
-
-    // Loading durumunu göster
-    setState(() {
-      _isCheckingConnection = true;
-    });
-
-    // System restart sonrası stream subscription restore et
-    debugPrint('HomePage: Force restoring stream subscription');
-    _statusSubscription?.cancel(); // Eski subscription'ı kapat
-    _statusSubscription = _connectionService.statusStream.listen((status) {
-      if (mounted) {
-        final previousStatus = _connectionStatus;
-        debugPrint(
-          'HomePage: Stream received status: ${status.isConnected ? 'Connected' : 'Disconnected'} (${status.type})',
-        );
-        setState(() {
-          _connectionStatus = status;
-          _isCheckingConnection = false;
-        });
-
-        // Sadece durum değiştiğinde toast göster
-        if (previousStatus != status) {
-          _showConnectionToast(status);
-        }
-      }
-    });
-
-    // System restart sonrası ekstra bekleme
-    await Future.delayed(const Duration(seconds: 2));
-
-    try {
-      // Hızlı bağlantı kontrolü
-      await _connectionService.checkConnection();
-      debugPrint('HomePage: Quick connection check successful');
-    } catch (e) {
-      debugPrint('Quick connection check failed: $e');
-      // Hata durumunda 3 saniye sonra tekrar dene
-      await Future.delayed(const Duration(seconds: 3));
-      if (mounted) {
-        try {
-          await _connectionService.checkConnection();
-          debugPrint('HomePage: Retry connection check successful');
-        } catch (retryError) {
-          debugPrint(
-            'HomePage: Retry connection check also failed: $retryError',
-          );
-        }
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isCheckingConnection = false;
-        });
-      }
-    }
-
-    // Periyodik kontrolü de yeniden başlat
-    _connectionService.startPeriodicCheck();
-  }
-
-  void _stopConnectionServiceForRestart() {
-    debugPrint('HomePage: Stopping ConnectionService for system restart');
-
-    // ConnectionService'i durdur
-    _connectionService.stopPeriodicCheck();
-    _statusSubscription?.cancel();
-
-    // Toast'ları temizle
-    _removeActiveToast();
-
-    // Status'u manuel olarak güncelle (loading göstermemek için)
-    setState(() {
-      _connectionStatus = ConnectionStatus.disconnected();
-      _isCheckingConnection = false;
-    });
-  }
-
   void _showConnectionToast(ConnectionStatus status) {
     if (!mounted) return;
 
@@ -417,8 +336,7 @@ class _HomePageState extends State<HomePage> {
                                 title: 'Nöbetçi Eczane\nAyarları',
                                 icon: Icons.local_pharmacy,
                                 iconColor: const Color(0xFFE53E3E),
-                                onTap: () =>
-                                    _handleCardTap(context, 'Nöbetçi Eczane'),
+                                onTap: () => _handleCardTap('Nöbetçi Eczane'),
                               ),
                             ),
                             const SizedBox(width: 16),
@@ -427,8 +345,7 @@ class _HomePageState extends State<HomePage> {
                                 title: 'Wi-Fi & Ağ\nAyarları',
                                 icon: Icons.wifi,
                                 iconColor: const Color(0xFF38A169),
-                                onTap: () =>
-                                    _handleCardTap(context, 'Wi-Fi & Ağ'),
+                                onTap: () => _handleCardTap('Wi-Fi & Ağ'),
                               ),
                             ),
                           ],
@@ -442,7 +359,7 @@ class _HomePageState extends State<HomePage> {
                                 title: 'Medya\nYönetimi',
                                 icon: Icons.play_circle_filled,
                                 iconColor: const Color(0xFF3182CE),
-                                onTap: () => _handleCardTap(context, 'Medya'),
+                                onTap: () => _handleCardTap('Medya'),
                               ),
                             ),
                             const SizedBox(width: 16),
@@ -451,7 +368,7 @@ class _HomePageState extends State<HomePage> {
                                 title: 'Ekran\nAyarları',
                                 icon: Icons.monitor,
                                 iconColor: const Color(0xFF718096),
-                                onTap: () => _handleCardTap(context, 'Ekran'),
+                                onTap: () => _handleCardTap('Ekran'),
                               ),
                             ),
                           ],
@@ -656,7 +573,8 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _handleCardTap(BuildContext context, String cardType) async {
+  void _handleCardTap(String cardType) async {
+    // Async sonrası güvenlik için her await'ten sonra State.mounted kontrolü yapılacak.
     // Haptic feedback
     try {
       final hasVibrator = await Vibration.hasVibrator();
@@ -668,7 +586,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     // Context hala geçerliyse devam et
-    if (!context.mounted) return;
+    if (!mounted) return;
 
     // Card tıklandığında bağlantı kontrolü yap
     setState(() {
@@ -677,8 +595,10 @@ class _HomePageState extends State<HomePage> {
 
     try {
       await _connectionService.checkConnection();
+      if (!mounted) return; // async gap sonrası güvenlik
       // Bağlantı kontrolü sonucunun gelmesini bekle
       await Future.delayed(const Duration(milliseconds: 500));
+      if (!mounted) return;
     } catch (e) {
       debugPrint('Card tap connection check failed: $e');
     } finally {
@@ -702,6 +622,7 @@ class _HomePageState extends State<HomePage> {
         // Vibration hatası durumunda sessizce devam et
       }
 
+      if (!mounted) return;
       _showToast(
         icon: Icons.wifi_off,
         iconColor: const Color(0xFFE53E3E),
@@ -714,11 +635,13 @@ class _HomePageState extends State<HomePage> {
 
     // Bağlantı varsa normal navigasyon
     if (cardType == 'Nöbetçi Eczane') {
+      if (!mounted) return;
       Navigator.push(
         context,
         MaterialPageRoute(builder: (context) => const PharmacySettingsPage()),
       );
     } else if (cardType == 'Ekran') {
+      if (!mounted) return;
       await Navigator.push(
         context,
         MaterialPageRoute(builder: (context) => const ScreenSettingsPage()),
@@ -726,6 +649,7 @@ class _HomePageState extends State<HomePage> {
       // Artık sayfa dönüşlerinde otomatik kontrol yapmıyoruz
       // _quickConnectionCheck();
     } else if (cardType == 'Wi-Fi & Ağ') {
+      if (!mounted) return;
       await Navigator.push(
         context,
         MaterialPageRoute(builder: (context) => const WifiSettingsPage()),
@@ -733,12 +657,14 @@ class _HomePageState extends State<HomePage> {
       // Artık sayfa dönüşlerinde otomatik kontrol yapmıyoruz
       // _quickConnectionCheck();
     } else if (cardType == 'Medya') {
+      if (!mounted) return;
       Navigator.push(
         context,
         MaterialPageRoute(builder: (context) => const MediaManagementPage()),
       );
     } else {
       // Diğer sayfalar için geçici SnackBar
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('$cardType sayfası yakında eklenecek'),

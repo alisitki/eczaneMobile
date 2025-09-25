@@ -1,5 +1,8 @@
 import 'dart:io';
+// ignore: depend_on_referenced_packages
+import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:vibration/vibration.dart';
@@ -34,14 +37,27 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
   String? _errorMessage;
   bool _isApplying = false;
   bool _isUploading = false;
+  MediaKind? _currentUploadingKind;
+  double? _currentUploadProgress; // future use if backend supports
   final Set<String> _togglingIds = {};
 
   // Aktif toast'ları takip etmek için
   OverlayEntry? _activeToastEntry;
 
+  // Video thumbnail cache (mediaId -> bytes)
+  final Map<String, Uint8List?> _videoThumbCache = {};
+  bool _videoThumbPluginFailed = false; // MissingPluginException guard
+  final Map<String, int> _videoThumbRetryCounts =
+      {}; // backend thumb retry attempts
+  static const int _maxVideoThumbRetries = 6; // ~ progressive retry
+
   @override
   void initState() {
     super.initState();
+    if (kDebugMode) {
+      // ignore: avoid_print
+      print('[MediaPage] initState -> loading media');
+    }
     _loadMedia();
   }
 
@@ -52,6 +68,10 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
   }
 
   Future<void> _loadMedia() async {
+    if (kDebugMode) {
+      // ignore: avoid_print
+      print('[MediaPage] _loadMedia start');
+    }
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -63,12 +83,20 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
         _mediaItems = items;
         _isLoading = false;
       });
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('[MediaPage] _loadMedia success items=${items.length}');
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _errorMessage = 'Medya listesi alınamadı: $e';
         _isLoading = false;
       });
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('[MediaPage] _loadMedia error: $e');
+      }
     }
   }
 
@@ -189,6 +217,10 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
   }
 
   Future<void> _toggleMediaStatus(String mediaId) async {
+    if (kDebugMode) {
+      // ignore: avoid_print
+      print('[MediaPage] toggle requested for id=$mediaId');
+    }
     final index = _mediaItems.indexWhere((m) => m.id == mediaId);
     if (index == -1 || _togglingIds.contains(mediaId)) return;
     final original = _mediaItems[index];
@@ -202,6 +234,7 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
         active: newActive,
         thumbUrl: original.thumbUrl,
         url: original.url,
+        duration: original.duration,
       );
     });
     try {
@@ -210,12 +243,22 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
       setState(() {
         _mediaItems[index] = updated;
       });
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print(
+          '[MediaPage] toggle success id=$mediaId active=${updated.active}',
+        );
+      }
       if (updated.active) {
         _showSuccessToast('${updated.name} aktifleştirildi');
       } else {
         _showWarningToast('${updated.name} pasifleştirildi');
       }
     } catch (e) {
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('[MediaPage] toggle error id=$mediaId error=$e');
+      }
       if (!mounted) return;
       // Revert
       setState(() {
@@ -228,6 +271,95 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
           _togglingIds.remove(mediaId);
         });
       }
+    }
+  }
+
+  Future<void> _editDuration(MediaItemDto media) async {
+    final controller = TextEditingController(
+      text: (media.duration / 1000).round().toString(),
+    );
+    final result = await showDialog<int>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF2C3E50),
+          title: Text(
+            'Süre (saniye)',
+            style: GoogleFonts.inter(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          content: TextField(
+            controller: controller,
+            keyboardType: TextInputType.number,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: 'Örn: 10',
+              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.4)),
+              enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(
+                  color: Colors.white.withValues(alpha: 0.2),
+                ),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderSide: const BorderSide(color: Color(0xFF3182CE)),
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('İPTAL'),
+            ),
+            TextButton(
+              onPressed: () {
+                final val = int.tryParse(controller.text.trim());
+                if (val == null || val <= 0) {
+                  Navigator.pop(ctx);
+                  return;
+                }
+                Navigator.pop(ctx, val);
+              },
+              child: const Text('KAYDET'),
+            ),
+          ],
+        );
+      },
+    );
+    if (result == null) return;
+    final newMs = result * 1000;
+    final index = _mediaItems.indexWhere((m) => m.id == media.id);
+    if (index == -1) return;
+    final original = _mediaItems[index];
+    setState(() {
+      _mediaItems[index] = MediaItemDto(
+        id: original.id,
+        name: original.name,
+        type: original.type,
+        active: original.active,
+        thumbUrl: original.thumbUrl,
+        url: original.url,
+        duration: newMs,
+      );
+    });
+    try {
+      final updated = await _mediaService.setMediaDuration(media.id, newMs);
+      if (!mounted) return;
+      setState(() {
+        _mediaItems[index] = updated;
+      });
+      _showSuccessToast(
+        'Süre güncellendi (${(updated.duration / 1000).toStringAsFixed(0)} sn)',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _mediaItems[index] = original; // revert
+      });
+      _showWarningToast('Süre güncellenemedi: $e');
     }
   }
 
@@ -341,12 +473,22 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
     try {
       setState(() {
         _isUploading = true;
+        _currentUploadingKind = kind;
+        _currentUploadProgress = null;
       });
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('[MediaPage] upload start type=$kind');
+      }
       final result = await FilePicker.platform.pickFiles(
         type: kind == MediaKind.image ? FileType.image : FileType.video,
         allowMultiple: false,
       );
       if (result == null || result.files.isEmpty) {
+        if (kDebugMode) {
+          // ignore: avoid_print
+          print('[MediaPage] upload canceled/no file selected');
+        }
         _showWarningToast('Dosya seçilmedi');
         return;
       }
@@ -356,36 +498,195 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
         return;
       }
       final file = File(path);
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('[MediaPage] uploading file=${file.path.split('/').last}');
+      }
       final uploaded = await _mediaService.uploadMedia(file, kind);
       if (!mounted) return;
       setState(() {
         _mediaItems.add(uploaded);
       });
+      // Eğer video ise backend thumb oluşmuş mu doğrulamak için polling başlat
+      if (uploaded.type == MediaKind.video &&
+          uploaded.thumbUrl != null &&
+          uploaded.thumbUrl!.isNotEmpty) {
+        _pollBackendVideoThumb(uploaded);
+      }
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print(
+          '[MediaPage] upload success id=${uploaded.id} name=${uploaded.name}',
+        );
+      }
       _showSuccessToast('${uploaded.name} yüklendi');
     } catch (e) {
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('[MediaPage] upload error: $e');
+      }
       _showWarningToast('Yükleme hatası: $e');
     } finally {
       if (mounted) {
         setState(() {
           _isUploading = false;
+          _currentUploadingKind = null;
+          _currentUploadProgress = null;
         });
       }
     }
   }
 
+  void _pollBackendVideoThumb(MediaItemDto media) {
+    // Zaten cache'te varsa gerek yok
+    if (_videoThumbCache.containsKey(media.id)) return;
+    final thumbUrl = media.thumbUrl;
+    if (thumbUrl == null || thumbUrl.isEmpty) return;
+    int attempt = 0;
+    const maxAttempts = 8; // ~ birkaç saniye
+
+    Future<void> attemptFetch() async {
+      if (!mounted) return;
+      if (_videoThumbCache.containsKey(media.id)) return; // artık geldi
+      attempt++;
+      final cacheBuster = attempt == 1
+          ? ''
+          : (thumbUrl.contains('?') ? '&p=$attempt' : '?p=$attempt');
+      final url = '$thumbUrl$cacheBuster';
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print(
+          '[MediaPage] polling thumb attempt=$attempt id=${media.id} url=$url',
+        );
+      }
+      try {
+        final client = HttpClient();
+        client.connectionTimeout = const Duration(seconds: 3);
+        final request = await client.getUrl(Uri.parse(url));
+        final response = await request.close();
+        if (response.statusCode == 200) {
+          final bytes = await consolidateHttpClientResponseBytes(response);
+          if (bytes.isNotEmpty) {
+            if (!mounted) return;
+            setState(() {
+              _videoThumbCache[media.id] = bytes;
+            });
+            if (kDebugMode) {
+              // ignore: avoid_print
+              print('[MediaPage] thumb polling success id=${media.id}');
+            }
+            client.close(force: true);
+            return; // tamam
+          }
+        }
+        client.close(force: true);
+      } catch (e) {
+        if (kDebugMode) {
+          // ignore: avoid_print
+          print(
+            '[MediaPage] thumb polling error attempt=$attempt id=${media.id} error=$e',
+          );
+        }
+      }
+      if (attempt < maxAttempts) {
+        // Artan gecikme: 300ms * attempt
+        final delay = Duration(milliseconds: 300 * attempt);
+        Future.delayed(delay, attemptFetch);
+      } else {
+        if (kDebugMode) {
+          // ignore: avoid_print
+          print(
+            '[MediaPage] thumb polling stopped (max attempts) id=${media.id}',
+          );
+        }
+      }
+    }
+
+    // İlk başlat
+    attemptFetch();
+  }
+
+  Future<void> _confirmAndDelete(MediaItemDto media) async {
+    HapticFeedback.lightImpact();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF2C3E50),
+        title: Text(
+          'Silinsin mi?',
+          style: GoogleFonts.inter(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        content: Text(
+          '"${media.name}" kalıcı olarak silinecek. Emin misiniz?',
+          style: GoogleFonts.inter(
+            color: Colors.white.withValues(alpha: 0.8),
+            fontSize: 14,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('İPTAL'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'SİL',
+              style: TextStyle(color: Color(0xFFE74C3C)),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final index = _mediaItems.indexWhere((m) => m.id == media.id);
+    if (index == -1) return;
+    final removed = media;
+    setState(() {
+      _mediaItems.removeAt(index);
+    });
+    try {
+      await _mediaService.deleteMedia(media.id);
+      _showSuccessToast('Silindi');
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _mediaItems.insert(index, removed); // revert
+        });
+      }
+      _showWarningToast('Silinemedi: $e');
+    }
+  }
+
   Future<void> _updateScreen() async {
     if (_isApplying) return;
-    final activeIds = _mediaItems.where((m) => m.active).map((m) => m.id).toList();
+    final activeIds = _mediaItems
+        .where((m) => m.active)
+        .map((m) => m.id)
+        .toList();
     if (activeIds.isEmpty) {
-      _showWarningToast('Ekranı güncellemek için en az bir aktif medya gerekli');
+      _showWarningToast(
+        'Ekranı güncellemek için en az bir aktif medya gerekli',
+      );
       return;
     }
     setState(() => _isApplying = true);
+    if (kDebugMode) {
+      // ignore: avoid_print
+      print('[MediaPage] apply start activeIds=${activeIds.length}');
+    }
     try {
       await _mediaService.applyActiveMedia(activeIds);
       if (!mounted) return;
       _showSuccessToast('Ekran güncellendi (${activeIds.length} medya)');
     } catch (e) {
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('[MediaPage] apply error: $e');
+      }
       _showWarningToast('Ekran güncellenemedi: $e');
     } finally {
       if (mounted) {
@@ -422,7 +723,69 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
               ],
             ),
           ),
+
+          if (_isUploading) _buildUploadingOverlay(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildUploadingOverlay() {
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 200),
+      opacity: _isUploading ? 1 : 0,
+      child: Container(
+        width: double.infinity,
+        height: double.infinity,
+        color: Colors.black.withValues(alpha: 0.65),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 72,
+                height: 72,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    const CircularProgressIndicator(
+                      strokeWidth: 6,
+                      color: Color(0xFF3182CE),
+                    ),
+                    Icon(
+                      _currentUploadingKind == MediaKind.video
+                          ? Icons.video_library
+                          : Icons.image,
+                      color: Colors.white,
+                      size: 32,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                _currentUploadingKind == MediaKind.video
+                    ? 'Video yükleniyor...'
+                    : 'Medya yükleniyor...',
+                style: GoogleFonts.inter(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              if (_currentUploadProgress != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  '${(_currentUploadProgress! * 100).toStringAsFixed(0)}%',
+                  style: GoogleFonts.inter(
+                    color: Colors.white.withValues(alpha: 0.8),
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -438,14 +801,21 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.error_outline, color: Colors.white.withValues(alpha: 0.6), size: 48),
+            Icon(
+              Icons.error_outline,
+              color: Colors.white.withValues(alpha: 0.6),
+              size: 48,
+            ),
             const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
               child: Text(
                 _errorMessage!,
                 textAlign: TextAlign.center,
-                style: GoogleFonts.inter(color: Colors.white.withValues(alpha: 0.7), fontSize: 14),
+                style: GoogleFonts.inter(
+                  color: Colors.white.withValues(alpha: 0.7),
+                  fontSize: 14,
+                ),
               ),
             ),
             const SizedBox(height: 20),
@@ -847,20 +1217,88 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
           // Thumbnail bölümü
           Expanded(
             flex: 3,
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(
-                6,
-              ), // Thumbnail etrafında 6px boşluk
-              decoration: BoxDecoration(
-                color: const Color(0xFF2C3E50),
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(14),
+            child: GestureDetector(
+              onTap: () => _editDuration(media),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2C3E50),
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(14),
+                  ),
                 ),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8), // İç radius daha küçük
-                child: _buildThumbnail(media),
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: _buildThumbnail(media),
+                      ),
+                    ),
+                    // Delete button
+                    Positioned(
+                      left: 4,
+                      top: 4,
+                      child: GestureDetector(
+                        onTap: () => _confirmAndDelete(media),
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.55),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              width: 1,
+                            ),
+                          ),
+                          child: const Icon(
+                            Icons.delete_outline,
+                            size: 14,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      right: 4,
+                      top: 4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.55),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            width: 1,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.timer,
+                              size: 12,
+                              color: Colors.white,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              '${(media.duration / 1000).round()}s',
+                              style: GoogleFonts.inter(
+                                fontSize: 11,
+                                color: Colors.white,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -943,17 +1381,163 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
           ? Image.network(
               url,
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => _buildDefaultThumbnail(media.type),
+              errorBuilder: (_, error, stackTrace) =>
+                  _buildDefaultThumbnail(media.type),
             )
           : Image.asset(
               url,
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => _buildDefaultThumbnail(media.type),
+              errorBuilder: (_, error, stackTrace) =>
+                  _buildDefaultThumbnail(media.type),
             );
     } else if (media.type == MediaKind.video) {
-      return _buildVideoThumbnail();
+      Widget base;
+      // Cache -> memory image
+      if (_videoThumbCache.containsKey(media.id) &&
+          _videoThumbCache[media.id] != null) {
+        base = Image.memory(
+          _videoThumbCache[media.id]!,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          errorBuilder: (context, error, stackTrace) => _buildVideoThumbnail(),
+        );
+      } else if (media.thumbUrl != null && media.thumbUrl!.isNotEmpty) {
+        // Backend thumb
+        final vurl = media.thumbUrl!;
+        final net = vurl.startsWith('http');
+        // Cache-busting query param if we retried
+        final retry = _videoThumbRetryCounts[media.id] ?? 0;
+        final cacheBustedUrl = retry == 0 ? vurl : '$vurl?retry=$retry';
+        base = net
+            ? Image.network(
+                cacheBustedUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (_, err, stack) {
+                  if (kDebugMode) {
+                    // ignore: avoid_print
+                    print(
+                      '[MediaPage] backend thumb load error id=${media.id} attempt=$retry err=$err',
+                    );
+                  }
+                  _scheduleBackendThumbRetry(media);
+                  return _buildVideoThumbnail();
+                },
+              )
+            : Image.asset(
+                cacheBustedUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (_, err, stack) {
+                  if (kDebugMode) {
+                    // ignore: avoid_print
+                    print(
+                      '[MediaPage] backend asset thumb load error id=${media.id} attempt=$retry err=$err',
+                    );
+                  }
+                  _scheduleBackendThumbRetry(media);
+                  return _buildVideoThumbnail();
+                },
+              );
+      } else {
+        base = _buildVideoThumbnail();
+      }
+      // Thumb üretimini deneyelim (plugin çalışıyorsa ve cache'te yoksa)
+      if (!_videoThumbPluginFailed && !_videoThumbCache.containsKey(media.id)) {
+        _maybeGenerateVideoThumb(media);
+      }
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(child: base),
+          // Koyu overlay (hafif)
+          Container(color: Colors.black.withValues(alpha: 0.15)),
+          // Play ikonu
+          Center(
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.play_arrow,
+                color: Colors.white,
+                size: 28,
+              ),
+            ),
+          ),
+        ],
+      );
     }
     return _buildDefaultThumbnail(media.type);
+  }
+
+  Future<void> _maybeGenerateVideoThumb(MediaItemDto media) async {
+    // Yalnızca video
+    if (media.type != MediaKind.video) return;
+    // Zaten cache'te varsa tekrar üretme
+    if (_videoThumbCache.containsKey(media.id)) return;
+    if (_videoThumbPluginFailed) return; // plugin yoksa boşuna deneme
+    // URL yoksa (henüz upload edilmiş ve backend dönmemiş olabilir) vazgeç
+    final videoUrl = media.url;
+    if (videoUrl == null || videoUrl.isEmpty) return;
+    // Şimdilik sadece network http(s) destekliyoruz
+    if (!videoUrl.startsWith('http')) return;
+    // Geçici null koy ki tekrar tekrar tetiklenmesin
+    _videoThumbCache[media.id] = null;
+    try {
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('[MediaPage] generating video thumb id=${media.id}');
+      }
+      // video_thumbnail paketi import edilince kullanılacak
+      // ignore: depend_on_referenced_packages
+      final videoThumbnail = await VideoThumbnail.thumbnailData(
+        video: videoUrl,
+        imageFormat: ImageFormat.JPEG,
+        quality: 75,
+      );
+      if (!mounted) return;
+      if (videoThumbnail != null) {
+        setState(() {
+          _videoThumbCache[media.id] = videoThumbnail;
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('[MediaPage] video thumb error id=${media.id} error=$e');
+      }
+      if (e is MissingPluginException) {
+        // Plugin yoksa tekrar denemeyelim
+        _videoThumbPluginFailed = true;
+      }
+    }
+  }
+
+  void _scheduleBackendThumbRetry(MediaItemDto media) {
+    if (media.thumbUrl == null || media.thumbUrl!.isEmpty) return;
+    final current = _videoThumbRetryCounts[media.id] ?? 0;
+    if (current >= _maxVideoThumbRetries) return;
+    // Bir sonraki deneme için artan gecikme (300ms * attempt)
+    final delay = Duration(milliseconds: 300 * (current + 1));
+    _videoThumbRetryCounts[media.id] = current + 1;
+    if (kDebugMode) {
+      // ignore: avoid_print
+      print(
+        '[MediaPage] scheduling thumb retry id=${media.id} attempt=${current + 1} delay=${delay.inMilliseconds}ms',
+      );
+    }
+    Future.delayed(delay, () {
+      if (!mounted) return;
+      // Sadece hala memory cache oluşmadıysa ve max'a ulaşmadıysa setState ile tekrar dene
+      if ((_videoThumbCache[media.id] == null) &&
+          (_videoThumbRetryCounts[media.id] ?? 0) <= _maxVideoThumbRetries) {
+        setState(
+          () {},
+        ); // rebuild -> Image.network yeniden deneyecek (cache bust param ile)
+      }
+    });
   }
 
   Widget _buildVideoThumbnail() {
@@ -1040,4 +1624,3 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
     );
   }
 }
-

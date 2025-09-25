@@ -67,6 +67,8 @@ dependencies:
   vibration: ^2.0.0
   # File picker for selecting media files
   file_picker: ^8.0.3
+  # Generate thumbnails from local/network video files
+  video_thumbnail: ^0.5.3
 
 dev_dependencies:
   flutter_test:
