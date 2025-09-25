@@ -1,9 +1,12 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:vibration/vibration.dart';
+import 'package:file_picker/file_picker.dart';
 import '../widgets/animated_particles.dart';
 import '../widgets/animated_toast.dart';
+import '../services/media_service.dart';
 
 class MediaManagementPage extends StatefulWidget {
   const MediaManagementPage({super.key});
@@ -23,59 +26,50 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
   bool _isFilterActivePressed = false;
   bool _isFilterInactivePressed = false;
 
-  // Mock medya verileri
-  final List<MediaItem> _mediaItems = [
-    MediaItem(
-      id: '1',
-      name: 'eczane_logo.jpg',
-      type: MediaType.image,
-      isActive: true,
-      thumbnailPath: 'assets/images/logo.png',
-    ),
-    MediaItem(
-      id: '2',
-      name: 'tanitim_video.mp4',
-      type: MediaType.video,
-      isActive: true,
-      thumbnailPath: null,
-    ),
-    MediaItem(
-      id: '3',
-      name: 'kampanya_banner.png',
-      type: MediaType.image,
-      isActive: false,
-      thumbnailPath: 'assets/images/slogan.png',
-    ),
-    MediaItem(
-      id: '4',
-      name: 'rehber_video.mp4',
-      type: MediaType.video,
-      isActive: false,
-      thumbnailPath: null,
-    ),
-    MediaItem(
-      id: '5',
-      name: 'acilis_fotografi.jpg',
-      type: MediaType.image,
-      isActive: true,
-      thumbnailPath: 'assets/images/version.png',
-    ),
-    MediaItem(
-      id: '6',
-      name: 'etkinlik_video.mp4',
-      type: MediaType.video,
-      isActive: true,
-      thumbnailPath: null,
-    ),
-  ];
+  // Backend medya verileri
+  final MediaService _mediaService = MediaService();
+  List<MediaItemDto> _mediaItems = [];
+
+  bool _isLoading = true;
+  String? _errorMessage;
+  bool _isApplying = false;
+  bool _isUploading = false;
+  final Set<String> _togglingIds = {};
 
   // Aktif toast'ları takip etmek için
   OverlayEntry? _activeToastEntry;
 
   @override
+  void initState() {
+    super.initState();
+    _loadMedia();
+  }
+
+  @override
   void dispose() {
     _removeActiveToast();
     super.dispose();
+  }
+
+  Future<void> _loadMedia() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    try {
+      final items = await _mediaService.getMediaList();
+      if (!mounted) return;
+      setState(() {
+        _mediaItems = items;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Medya listesi alınamadı: $e';
+        _isLoading = false;
+      });
+    }
   }
 
   void _removeActiveToast() {
@@ -86,12 +80,12 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
   }
 
   // Filtrelenmiş medya listesi
-  List<MediaItem> get _filteredMediaItems {
+  List<MediaItemDto> get _filteredMediaItems {
     switch (_selectedFilter) {
       case 1:
-        return _mediaItems.where((item) => item.isActive).toList();
+        return _mediaItems.where((item) => item.active).toList();
       case 2:
-        return _mediaItems.where((item) => !item.isActive).toList();
+        return _mediaItems.where((item) => !item.active).toList();
       default:
         return _mediaItems;
     }
@@ -194,21 +188,47 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
     overlay.insert(_activeToastEntry!);
   }
 
-  void _toggleMediaStatus(String mediaId) {
+  Future<void> _toggleMediaStatus(String mediaId) async {
+    final index = _mediaItems.indexWhere((m) => m.id == mediaId);
+    if (index == -1 || _togglingIds.contains(mediaId)) return;
+    final original = _mediaItems[index];
+    final newActive = !original.active;
     setState(() {
-      final mediaIndex = _mediaItems.indexWhere((item) => item.id == mediaId);
-      if (mediaIndex != -1) {
-        _mediaItems[mediaIndex].isActive = !_mediaItems[mediaIndex].isActive;
-        final isActive = _mediaItems[mediaIndex].isActive;
-        final mediaName = _mediaItems[mediaIndex].name;
-
-        if (isActive) {
-          _showSuccessToast('$mediaName aktifleştirildi');
-        } else {
-          _showWarningToast('$mediaName pasifleştirildi');
-        }
-      }
+      _togglingIds.add(mediaId);
+      _mediaItems[index] = MediaItemDto(
+        id: original.id,
+        name: original.name,
+        type: original.type,
+        active: newActive,
+        thumbUrl: original.thumbUrl,
+        url: original.url,
+      );
     });
+    try {
+      final updated = await _mediaService.setMediaActive(mediaId, newActive);
+      if (!mounted) return;
+      setState(() {
+        _mediaItems[index] = updated;
+      });
+      if (updated.active) {
+        _showSuccessToast('${updated.name} aktifleştirildi');
+      } else {
+        _showWarningToast('${updated.name} pasifleştirildi');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      // Revert
+      setState(() {
+        _mediaItems[index] = original;
+      });
+      _showWarningToast('Güncellenemedi: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _togglingIds.remove(mediaId);
+        });
+      }
+    }
   }
 
   void _showAddMediaBottomSheet() {
@@ -258,12 +278,12 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
                 const SizedBox(height: 24),
                 _buildMediaTypeButton('Fotoğraf Seç', Icons.photo_library, () {
                   Navigator.pop(context);
-                  _mockFileSelection('image');
+                  _pickAndUploadFile(MediaKind.image);
                 }),
                 const SizedBox(height: 12),
                 _buildMediaTypeButton('Video Seç', Icons.video_library, () {
                   Navigator.pop(context);
-                  _mockFileSelection('video');
+                  _pickAndUploadFile(MediaKind.video);
                 }),
                 const SizedBox(height: 20),
               ],
@@ -316,39 +336,62 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
     );
   }
 
-  void _mockFileSelection(String type) {
-    // Mock dosya seçimi
-    final fileName = type == 'image' ? 'yeni_fotograf.jpg' : 'yeni_video.mp4';
-    final newMedia = MediaItem(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: fileName,
-      type: type == 'image' ? MediaType.image : MediaType.video,
-      isActive: true,
-      thumbnailPath: type == 'image' ? 'assets/images/logo.png' : null,
-    );
-
-    setState(() {
-      _mediaItems.add(newMedia);
-    });
-
-    _showSuccessToast('$fileName başarıyla eklendi');
+  Future<void> _pickAndUploadFile(MediaKind kind) async {
+    if (_isUploading) return;
+    try {
+      setState(() {
+        _isUploading = true;
+      });
+      final result = await FilePicker.platform.pickFiles(
+        type: kind == MediaKind.image ? FileType.image : FileType.video,
+        allowMultiple: false,
+      );
+      if (result == null || result.files.isEmpty) {
+        _showWarningToast('Dosya seçilmedi');
+        return;
+      }
+      final path = result.files.single.path;
+      if (path == null) {
+        _showWarningToast('Dosya yolu alınamadı');
+        return;
+      }
+      final file = File(path);
+      final uploaded = await _mediaService.uploadMedia(file, kind);
+      if (!mounted) return;
+      setState(() {
+        _mediaItems.add(uploaded);
+      });
+      _showSuccessToast('${uploaded.name} yüklendi');
+    } catch (e) {
+      _showWarningToast('Yükleme hatası: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUploading = false;
+        });
+      }
+    }
   }
 
-  void _updateScreen() {
-    // Aktif medya dosyalarını say
-    final activeMediaCount = _mediaItems.where((item) => item.isActive).length;
-
-    if (activeMediaCount == 0) {
-      _showWarningToast(
-        'Ekranı güncellemek için en az bir aktif medya seçili olmalı',
-      );
+  Future<void> _updateScreen() async {
+    if (_isApplying) return;
+    final activeIds = _mediaItems.where((m) => m.active).map((m) => m.id).toList();
+    if (activeIds.isEmpty) {
+      _showWarningToast('Ekranı güncellemek için en az bir aktif medya gerekli');
       return;
     }
-
-    // Mock backend güncelleme
-    _showSuccessToast(
-      'Ekran güncellendi! $activeMediaCount aktif medya gönderildi',
-    );
+    setState(() => _isApplying = true);
+    try {
+      await _mediaService.applyActiveMedia(activeIds);
+      if (!mounted) return;
+      _showSuccessToast('Ekran güncellendi (${activeIds.length} medya)');
+    } catch (e) {
+      _showWarningToast('Ekran güncellenemedi: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isApplying = false);
+      }
+    }
   }
 
   @override
@@ -375,12 +418,53 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
               children: [
                 _buildHeader(),
                 _buildFilterSection(),
-                Expanded(child: _buildMediaGrid()),
+                Expanded(child: _buildBodyContent()),
               ],
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildBodyContent() {
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Color(0xFF3182CE)),
+      );
+    }
+    if (_errorMessage != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, color: Colors.white.withValues(alpha: 0.6), size: 48),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                _errorMessage!,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.inter(color: Colors.white.withValues(alpha: 0.7), fontSize: 14),
+              ),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF3182CE),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: _loadMedia,
+              child: const Text('Tekrar Dene'),
+            ),
+          ],
+        ),
+      );
+    }
+    return RefreshIndicator(
+      color: const Color(0xFF3182CE),
+      onRefresh: _loadMedia,
+      child: _buildMediaGrid(),
     );
   }
 
@@ -729,14 +813,14 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
     );
   }
 
-  Widget _buildMediaCard(MediaItem media) {
+  Widget _buildMediaCard(MediaItemDto media) {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       decoration: BoxDecoration(
         color: const Color(0xFF34495e).withValues(alpha: 0.3),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: media.isActive
+          color: media.active
               ? const Color(0xFF38A169).withValues(alpha: 0.6) // Yeşil - Aktif
               : const Color(
                   0xFFE74C3C,
@@ -745,7 +829,7 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
         ),
         boxShadow: [
           BoxShadow(
-            color: media.isActive
+            color: media.active
                 ? const Color(0xFF38A169).withValues(
                     alpha: 0.2,
                   ) // Yeşil gölge - Aktif
@@ -798,31 +882,33 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        media.isActive ? 'AKTİF' : 'PASİF',
+                        media.active ? 'AKTİF' : 'PASİF',
                         style: GoogleFonts.inter(
                           fontSize: 11,
                           fontWeight: FontWeight.w500,
-                          color: media.isActive
+                          color: media.active
                               ? const Color(0xFF38A169)
                               : Colors.white.withValues(alpha: 0.5),
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
                       GestureDetector(
-                        onTap: () => _toggleMediaStatus(media.id),
+                        onTap: _togglingIds.contains(media.id)
+                            ? null
+                            : () => _toggleMediaStatus(media.id),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 200),
                           width: 40, // 44'den 40'a küçülttük
                           height: 22, // 24'den 22'ye küçülttük
                           decoration: BoxDecoration(
-                            color: media.isActive
+                            color: media.active
                                 ? const Color(0xFF38A169)
                                 : Colors.white.withValues(alpha: 0.3),
                             borderRadius: BorderRadius.circular(11),
                           ),
                           child: AnimatedAlign(
                             duration: const Duration(milliseconds: 200),
-                            alignment: media.isActive
+                            alignment: media.active
                                 ? Alignment.centerRight
                                 : Alignment.centerLeft,
                             child: Container(
@@ -848,25 +934,26 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
     );
   }
 
-  Widget _buildThumbnail(MediaItem media) {
-    if (media.type == MediaType.image && media.thumbnailPath != null) {
-      return Center(
-        child: Image.asset(
-          media.thumbnailPath!,
-          fit: BoxFit.contain,
-          width: double.infinity,
-          height: double.infinity,
-          errorBuilder: (context, error, stackTrace) {
-            return _buildDefaultThumbnail(media.type);
-          },
-        ),
-      );
-    } else if (media.type == MediaType.video) {
-      // Video için mock thumbnail + play button overlay
+  Widget _buildThumbnail(MediaItemDto media) {
+    if (media.type == MediaKind.image && media.thumbUrl != null) {
+      final url = media.thumbUrl!;
+      final isNetwork = url.startsWith('http');
+      // Varsayım: Backend tam URL döner. Aksi halde burada base ile birleştirme yapılmalı.
+      return isNetwork
+          ? Image.network(
+              url,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => _buildDefaultThumbnail(media.type),
+            )
+          : Image.asset(
+              url,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => _buildDefaultThumbnail(media.type),
+            );
+    } else if (media.type == MediaKind.video) {
       return _buildVideoThumbnail();
-    } else {
-      return _buildDefaultThumbnail(media.type);
     }
+    return _buildDefaultThumbnail(media.type);
   }
 
   Widget _buildVideoThumbnail() {
@@ -927,7 +1014,7 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
     );
   }
 
-  Widget _buildDefaultThumbnail(MediaType type) {
+  Widget _buildDefaultThumbnail(MediaKind type) {
     return Container(
       width: double.infinity,
       height: double.infinity,
@@ -936,13 +1023,13 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
-            type == MediaType.image ? Icons.image : Icons.play_circle_fill,
+            type == MediaKind.image ? Icons.image : Icons.play_circle_fill,
             size: 48,
             color: const Color(0xFF3182CE),
           ),
           const SizedBox(height: 8),
           Text(
-            type == MediaType.image ? 'Fotoğraf' : 'Video',
+            type == MediaKind.image ? 'Fotoğraf' : 'Video',
             style: GoogleFonts.inter(
               fontSize: 12,
               color: Colors.white.withValues(alpha: 0.6),
@@ -954,22 +1041,3 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
   }
 }
 
-// Medya türü enum
-enum MediaType { image, video }
-
-// Medya öğesi modeli
-class MediaItem {
-  final String id;
-  final String name;
-  final MediaType type;
-  bool isActive;
-  final String? thumbnailPath;
-
-  MediaItem({
-    required this.id,
-    required this.name,
-    required this.type,
-    required this.isActive,
-    this.thumbnailPath,
-  });
-}
