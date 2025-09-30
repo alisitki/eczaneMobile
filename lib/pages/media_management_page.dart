@@ -238,7 +238,9 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
       );
     });
     try {
-      final updated = await _mediaService.setMediaActive(mediaId, newActive);
+      final updated = original.type == MediaKind.weather
+          ? await _mediaService.updateWeather(active: newActive)
+          : await _mediaService.setMediaActive(mediaId, newActive);
       if (!mounted) return;
       setState(() {
         _mediaItems[index] = updated;
@@ -346,7 +348,9 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
       );
     });
     try {
-      final updated = await _mediaService.setMediaDuration(media.id, newMs);
+      final updated = media.type == MediaKind.weather
+          ? await _mediaService.updateWeather(durationMs: newMs)
+          : await _mediaService.setMediaDuration(media.id, newMs);
       if (!mounted) return;
       setState(() {
         _mediaItems[index] = updated;
@@ -607,6 +611,11 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
   }
 
   Future<void> _confirmAndDelete(MediaItemDto media) async {
+    // Weather (hava durumu) sabit içerik: silinemez
+    if (media.type == MediaKind.weather) {
+      _showWarningToast('Hava durumu içeriği silinemez');
+      return;
+    }
     HapticFeedback.lightImpact();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1218,6 +1227,7 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
           Expanded(
             flex: 3,
             child: GestureDetector(
+              // Weather da süresi ayarlanabilir, bu yüzden engellemiyoruz.
               onTap: () => _editDuration(media),
               child: Container(
                 width: double.infinity,
@@ -1237,13 +1247,39 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
                       ),
                     ),
                     // Delete button
-                    Positioned(
-                      left: 4,
-                      top: 4,
-                      child: GestureDetector(
-                        onTap: () => _confirmAndDelete(media),
+                    if (media.type != MediaKind.weather)
+                      Positioned(
+                        left: 4,
+                        top: 4,
+                        child: GestureDetector(
+                          onTap: () => _confirmAndDelete(media),
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.55),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.2),
+                                width: 1,
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.delete_outline,
+                              size: 14,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      Positioned(
+                        left: 4,
+                        top: 4,
                         child: Container(
-                          padding: const EdgeInsets.all(4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
                             color: Colors.black.withValues(alpha: 0.55),
                             borderRadius: BorderRadius.circular(8),
@@ -1252,14 +1288,28 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
                               width: 1,
                             ),
                           ),
-                          child: const Icon(
-                            Icons.delete_outline,
-                            size: 14,
-                            color: Colors.white,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.cloud,
+                                size: 12,
+                                color: Colors.white,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'WEATHER',
+                                style: GoogleFonts.inter(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white.withValues(alpha: 0.9),
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
-                    ),
                     Positioned(
                       right: 4,
                       top: 4,
@@ -1607,13 +1657,21 @@ class _MediaManagementPageState extends State<MediaManagementPage> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
-            type == MediaKind.image ? Icons.image : Icons.play_circle_fill,
+            type == MediaKind.image
+                ? Icons.image
+                : type == MediaKind.video
+                ? Icons.play_circle_fill
+                : Icons.cloud,
             size: 48,
             color: const Color(0xFF3182CE),
           ),
           const SizedBox(height: 8),
           Text(
-            type == MediaKind.image ? 'Fotoğraf' : 'Video',
+            type == MediaKind.image
+                ? 'Fotoğraf'
+                : type == MediaKind.video
+                ? 'Video'
+                : 'Hava Durumu',
             style: GoogleFonts.inter(
               fontSize: 12,
               color: Colors.white.withValues(alpha: 0.6),

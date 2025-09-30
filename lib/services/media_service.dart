@@ -7,7 +7,7 @@ import 'package:http/http.dart' as http;
 import '../services/connection_service.dart';
 
 /// Media item type used by service layer
-enum MediaKind { image, video }
+enum MediaKind { image, video, weather }
 
 /// Media item DTO to match backend
 class MediaItemDto {
@@ -31,7 +31,19 @@ class MediaItemDto {
 
   factory MediaItemDto.fromJson(Map<String, dynamic> json) {
     final typeStr = (json['type'] ?? '').toString().toLowerCase();
-    final mediaType = typeStr == 'video' ? MediaKind.video : MediaKind.image;
+    final mediaType = () {
+      switch (typeStr) {
+        case 'video':
+          return MediaKind.video;
+        case 'weather':
+        case 'hava': // olası backend alternatifi
+          return MediaKind.weather;
+        case 'image':
+        case 'foto':
+        default:
+          return MediaKind.image;
+      }
+    }();
     return MediaItemDto(
       id: json['id'].toString(),
       name: json['name']?.toString() ?? '',
@@ -156,7 +168,7 @@ class MediaService {
     return MediaItemDto.fromJson((item as Map).cast<String, dynamic>());
   }
 
-  /// POST /api/mobile/media multipart: file, type=image|video
+  /// POST /api/mobile/media multipart: file, type=image|video (weather sunî eklenmez)
   Future<MediaItemDto> uploadMedia(File file, MediaKind type) async {
     final base = await _getApiBaseUrl();
     final uri = Uri.parse('$base/api/mobile/media');
@@ -168,6 +180,9 @@ class MediaService {
     }
 
     final request = http.MultipartRequest('POST', uri);
+    if (type == MediaKind.weather) {
+      throw ArgumentError('Weather medyası client tarafından yüklenemez');
+    }
     request.fields['type'] = type == MediaKind.video ? 'video' : 'image';
     request.fields['duration'] = '10000'; // default 10s
     request.files.add(await http.MultipartFile.fromPath('file', file.path));
@@ -270,5 +285,49 @@ class MediaService {
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw HttpException('Delete media failed: ${res.statusCode}');
     }
+  }
+
+  /// POST /api/mobile/media/weather  (aktif/pasif + süre + opsiyonel refreshInterval)
+  /// Body'de sadece gönderilen alanlar bulunur.
+  Future<MediaItemDto> updateWeather({
+    bool? active,
+    int? durationMs,
+    int? refreshIntervalMs,
+  }) async {
+    final bodyMap = <String, dynamic>{};
+    if (active != null) bodyMap['active'] = active;
+    if (durationMs != null) bodyMap['duration'] = durationMs;
+    if (refreshIntervalMs != null) {
+      bodyMap['refreshInterval'] = refreshIntervalMs;
+    }
+    if (bodyMap.isEmpty) {
+      throw ArgumentError('updateWeather için en az bir alan gerekli');
+    }
+    final base = await _getApiBaseUrl();
+    final uri = Uri.parse('$base/api/mobile/media/weather');
+    if (kDebugMode) {
+      // ignore: avoid_print
+      print('[MediaService] => POST $uri body=${json.encode(bodyMap)}');
+    }
+    final res = await http
+        .post(uri, headers: _jsonHeaders, body: json.encode(bodyMap))
+        .timeout(const Duration(seconds: 10));
+    if (kDebugMode) {
+      // ignore: avoid_print
+      print('[MediaService] <= ${res.statusCode} (weather update)');
+      if (res.statusCode == 200) {
+        // ignore: avoid_print
+        print('[MediaService] body: ${res.body}');
+      } else {
+        // ignore: avoid_print
+        print('[MediaService] error body: ${res.body}');
+      }
+    }
+    if (res.statusCode != 200) {
+      throw HttpException('Weather update failed: ${res.statusCode}');
+    }
+    final data = json.decode(res.body);
+    final item = data['item'] ?? data['media'];
+    return MediaItemDto.fromJson((item as Map).cast<String, dynamic>());
   }
 }
