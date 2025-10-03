@@ -23,6 +23,7 @@ class _HomePageState extends State<HomePage> {
   bool _isCheckingConnection = false;
   StreamSubscription<ConnectionStatus>? _statusSubscription;
   OverlayEntry? _activeToastEntry;
+  bool _showHotspotInfo = false; // yeni: hotspot bilgilendirme overlay flag
 
   @override
   void initState() {
@@ -214,6 +215,14 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _handleManualConnectionCheck() async {
+    // Hotspot bilgilendirme overlay tetikleme: eğer hotspot veya none ise aç
+    if (!_connectionStatus.isConnected ||
+        _connectionStatus.type == ConnectionType.hotspot) {
+      setState(() {
+        _showHotspotInfo = true;
+      });
+    }
+
     // Haptic feedback
     try {
       final hasVibrator = await Vibration.hasVibrator();
@@ -250,6 +259,14 @@ class _HomePageState extends State<HomePage> {
         subtitle: 'Bağlantı durumu güncellendi',
         backgroundColor: const Color(0xFF3182CE),
       );
+    }
+  }
+
+  void _closeHotspotInfo() {
+    if (mounted) {
+      setState(() {
+        _showHotspotInfo = false;
+      });
     }
   }
 
@@ -495,7 +512,159 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ), // SafeArea kapanış parantezi
+          if (_showHotspotInfo)
+            Positioned.fill(child: _buildHotspotInfoOverlay()),
         ],
+      ),
+    );
+  }
+
+  Widget _buildHotspotInfoOverlay() {
+    return Container(
+      decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.55)),
+      child: Center(
+        child: AnimatedScale(
+          duration: const Duration(milliseconds: 180),
+          scale: 1.0,
+          child: Container(
+            width: MediaQuery.of(context).size.width * 0.88,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1F2330),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.4),
+                  blurRadius: 24,
+                  offset: const Offset(0, 12),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF3182CE).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.wifi_tethering,
+                        color: Color(0xFF3182CE),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Hotspot Bağlantısı Bilgilendirme',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: _closeHotspotInfo,
+                      icon: const Icon(
+                        Icons.close,
+                        size: 20,
+                        color: Colors.white70,
+                      ),
+                      tooltip: 'Kapat',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Hotspot ile bağlandıysanız telefonunuz üst bildirime "İnternet yok" uyarısı getirebilir. Bu durumda bildirimi açıp "Bağlı kal" / "Ağa bağlı kal" seçeneğini seçin. Aksi halde pano yerel servise ulaşamaz.',
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    height: 1.35,
+                    color: Colors.white.withValues(alpha: 0.85),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.07),
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(
+                        Icons.info_outline,
+                        size: 18,
+                        color: Color(0xFF3182CE),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Uyarı bildirimi gelmediyse önce bir kez internet kontrolü yapın veya uyarıyı tetiklemek için kısa süreli mobil veriyi kapat/aç yapabilirsiniz.',
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            height: 1.35,
+                            color: Colors.white.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: SizedBox(
+                        height: 48,
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.25),
+                            ),
+                            foregroundColor: Colors.white70,
+                          ),
+                          onPressed: _closeHotspotInfo,
+                          child: const Text('Kapat'),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: SizedBox(
+                        height: 48,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF3182CE),
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: () async {
+                            _handleManualConnectionCheck();
+                            if (_connectionStatus.isConnected) {
+                              _closeHotspotInfo();
+                            }
+                          },
+                          child: const Text('Bağlantıyı Kontrol Et'),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
