@@ -110,38 +110,16 @@ class _ScreenSettingsPageState extends State<ScreenSettingsPage> {
 
     switch (connectionStatus.type) {
       case ConnectionType.wifi:
-        // WiFi için önce ConnectionService'in cache'lenmiş IP'sini kontrol et
         final cachedIP = _connectionService.cachedHostnameIP;
         if (cachedIP != null && cachedIP.isNotEmpty) {
           debugPrint('Using cached IP from ConnectionService: $cachedIP');
-          return 'http://$cachedIP:3000';
+          return _connectionService.buildBaseUrlFromHost(cachedIP);
         }
-
-        // Cached IP yoksa ClientIP kontrol et
-        if (connectionStatus.clientIP != null &&
-            connectionStatus.clientIP!.isNotEmpty &&
-            connectionStatus.clientIP != ':') {
-          // ConnectionService'in başarıyla çözümlediği IP'yi kullan
-          final parts = connectionStatus.clientIP!.split(':');
-          if (parts.isNotEmpty && parts.first.isNotEmpty) {
-            final resolvedIP = parts.first;
-            debugPrint('Using resolved IP from ConnectionService: $resolvedIP');
-            return 'http://$resolvedIP:3000';
-          }
-        }
-
-        // Fallback olarak hostname kullan
         debugPrint('No valid resolved IP found, using hostname');
         return 'http://raspberrypi.local:3000';
-
       case ConnectionType.hotspot:
-        // Hotspot için direkt IP kullan
-        debugPrint('Using hotspot IP: 192.168.4.1');
-        return 'http://192.168.4.1:3000';
-
       case ConnectionType.none:
-        // Bağlantı yok ama yine de hotspot IP'yi dene
-        debugPrint('No connection, trying hotspot IP as fallback');
+        debugPrint('Using hotspot IP: 192.168.4.1');
         return 'http://192.168.4.1:3000';
     }
   }

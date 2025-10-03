@@ -77,10 +77,9 @@ class _WifiSettingsPageState extends State<WifiSettingsPage> {
           'raspberrypi.local',
         );
         if (cachedIP != null && cachedIP.isNotEmpty) {
-          return 'http://$cachedIP:3000';
+          return _connectionService.buildBaseUrlFromHost(cachedIP);
         }
-        return 'http://raspberrypi.local:3000';
-
+        return 'http://raspberrypi.local:3000'; // IPv6 çözülmüşse cache'e düşer
       case ConnectionType.hotspot:
       case ConnectionType.none:
         return 'http://192.168.4.1:3000';

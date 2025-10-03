@@ -23,7 +23,6 @@ class _HomePageState extends State<HomePage> {
   bool _isCheckingConnection = false;
   StreamSubscription<ConnectionStatus>? _statusSubscription;
   OverlayEntry? _activeToastEntry;
-  bool _showHotspotInfo = false; // yeni: hotspot bilgilendirme overlay flag
 
   @override
   void initState() {
@@ -215,13 +214,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _handleManualConnectionCheck() async {
-    // Hotspot bilgilendirme overlay tetikleme: eğer hotspot veya none ise aç
-    if (!_connectionStatus.isConnected ||
-        _connectionStatus.type == ConnectionType.hotspot) {
-      setState(() {
-        _showHotspotInfo = true;
-      });
-    }
+    // Hotspot ise kullanıcı zaten alttaki karttaki yönergeyi görecek
 
     // Haptic feedback
     try {
@@ -262,16 +255,10 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  void _closeHotspotInfo() {
-    if (mounted) {
-      setState(() {
-        _showHotspotInfo = false;
-      });
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
+    final h = MediaQuery.of(context).size.height;
+    final uiScale = (h / 700).clamp(0.85, 1.0);
     return Scaffold(
       body: Stack(
         children: [
@@ -298,13 +285,13 @@ class _HomePageState extends State<HomePage> {
               children: [
                 // Logo ve başlık bölümü
                 Padding(
-                  padding: const EdgeInsets.only(top: 20, bottom: 10),
+                  padding: const EdgeInsets.only(top: 15, bottom: 20),
                   child: Column(
                     children: [
                       // Logo
                       Container(
-                        width: 240,
-                        height: 140,
+                        width: 200,
+                        height: 110,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(20),
                           boxShadow: [
@@ -323,12 +310,12 @@ class _HomePageState extends State<HomePage> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 15),
+                      const SizedBox(height: 6),
                       // Sayfa başlığı
                       Text(
                         'KONTROL MERKEZİ',
                         style: GoogleFonts.inter(
-                          fontSize: 24,
+                          fontSize: 21,
                           fontWeight: FontWeight.w600,
                           color: Colors.white,
                           letterSpacing: 1.2,
@@ -341,7 +328,7 @@ class _HomePageState extends State<HomePage> {
                 // Ana içerik - 4 buton
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 5),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.start,
                       children: [
@@ -367,7 +354,7 @@ class _HomePageState extends State<HomePage> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 10),
                         // İkinci satır - 2 buton
                         Row(
                           children: [
@@ -390,7 +377,7 @@ class _HomePageState extends State<HomePage> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 10),
 
                         // Bağlantı durumu - kompakt hale getirildi
                         Container(
@@ -430,68 +417,73 @@ class _HomePageState extends State<HomePage> {
                             ],
                           ),
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 10),
 
                         // Bağlantıyı Kontrol Et butonu
-                        _InteractiveCard(
-                          onTap: () => _handleManualConnectionCheck(),
-                          isEnabled: true, // Bu buton her zaman aktif
-                          child: Container(
-                            width: double.infinity,
-                            height: 60,
-                            decoration: BoxDecoration(
-                              color: const Color(
-                                0xFF2A2A3E,
-                              ).withValues(alpha: 0.8),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.1),
-                                width: 1,
-                              ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.2),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 3),
+                        SizedBox(
+                          height: 56 * uiScale,
+                          child: _InteractiveCard(
+                            onTap: () => _handleManualConnectionCheck(),
+                            isEnabled: true,
+                            child: Container(
+                              width: double.infinity,
+                              height: 56 * uiScale,
+                              decoration: BoxDecoration(
+                                color: const Color(
+                                  0xFF2A2A3E,
+                                ).withValues(alpha: 0.8),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.1),
+                                  width: 1,
                                 ),
-                              ],
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 18,
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Container(
-                                    width: 36,
-                                    height: 36,
-                                    decoration: BoxDecoration(
-                                      color: const Color(
-                                        0xFF3182CE,
-                                      ).withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: const Icon(
-                                      Icons.sync,
-                                      size: 20,
-                                      color: Color(0xFF3182CE),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Text(
-                                    'Bağlantıyı Kontrol Et',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w500,
-                                      color: Colors.white,
-                                    ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.2),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 3),
                                   ),
                                 ],
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Container(
+                                      width: 32 * uiScale,
+                                      height: 32 * uiScale,
+                                      decoration: BoxDecoration(
+                                        color: const Color(
+                                          0xFF3182CE,
+                                        ).withValues(alpha: 0.15),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Icon(
+                                        Icons.sync,
+                                        size: 18,
+                                        color: Color(0xFF3182CE),
+                                      ),
+                                    ),
+                                    SizedBox(width: 10 * uiScale),
+                                    Text(
+                                      'Bağlantıyı Kontrol Et',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 14 * uiScale,
+                                        fontWeight: FontWeight.w500,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
                         ),
+                        SizedBox(height: 12 * uiScale),
+                        _buildHotspotInfoCard(uiScale: uiScale),
                       ],
                     ),
                   ),
@@ -512,150 +504,77 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ), // SafeArea kapanış parantezi
-          if (_showHotspotInfo)
-            Positioned.fill(child: _buildHotspotInfoOverlay()),
         ],
       ),
     );
   }
 
-  Widget _buildHotspotInfoOverlay() {
+  Widget _buildHotspotInfoCard({double uiScale = 1}) {
     return Container(
-      decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.55)),
-      child: Center(
-        child: AnimatedScale(
-          duration: const Duration(milliseconds: 180),
-          scale: 1.0,
-          child: Container(
-            width: MediaQuery.of(context).size.width * 0.88,
-            padding: const EdgeInsets.all(20),
+      width: double.infinity,
+      padding: EdgeInsets.all(10 * uiScale),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2F3C).withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.08),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 34 * uiScale,
+            height: 34 * uiScale,
             decoration: BoxDecoration(
-              color: const Color(0xFF1F2330),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.4),
-                  blurRadius: 24,
-                  offset: const Offset(0, 12),
-                ),
-              ],
+              color: const Color(0xFF3182CE).withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
             ),
+            child: const Icon(
+              Icons.wifi_tethering,
+              color: Color(0xFF3182CE),
+              size: 18,
+            ),
+          ),
+          SizedBox(width: 8 * uiScale),
+          Expanded(
             child: Column(
-              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text(
+                  'Hotspot ile Bağlandıysanız',
+                  style: GoogleFonts.inter(
+                    fontSize: 12.2 * uiScale,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white.withValues(alpha: 0.95),
+                  ),
+                ),
+                SizedBox(height: 4 * uiScale),
+                Text(
+                  'Üst bildirim çubuğunda "İnternet yok" uyarısı çıkarsa bildirimi açıp "Bağlı kal" / "Ağa bağlı kal" seçeneğini seçin. Aksi halde pano servise erişemez.',
+                  style: GoogleFonts.inter(
+                    fontSize: 11.2 * uiScale,
+                    height: 1.32,
+                    color: Colors.white.withValues(alpha: 0.72),
+                  ),
+                ),
+                SizedBox(height: 5 * uiScale),
                 Row(
                   children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF3182CE).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.wifi_tethering,
-                        color: Color(0xFF3182CE),
-                      ),
+                    const Icon(
+                      Icons.info_outline,
+                      size: 12,
+                      color: Color(0xFF3182CE),
                     ),
-                    const SizedBox(width: 12),
+                    SizedBox(width: 4 * uiScale),
                     Expanded(
                       child: Text(
-                        'Hotspot Bağlantısı Bilgilendirme',
+                        'Uyarı gelmiyorsa önce bir bağlantı kontrolü yapın; gerekiyorsa mobil veriyi kısa süre kapatıp açın.',
                         style: GoogleFonts.inter(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: _closeHotspotInfo,
-                      icon: const Icon(
-                        Icons.close,
-                        size: 20,
-                        color: Colors.white70,
-                      ),
-                      tooltip: 'Kapat',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Hotspot ile bağlandıysanız telefonunuz üst bildirime "İnternet yok" uyarısı getirebilir. Bu durumda bildirimi açıp "Bağlı kal" / "Ağa bağlı kal" seçeneğini seçin. Aksi halde pano yerel servise ulaşamaz.',
-                  style: GoogleFonts.inter(
-                    fontSize: 14,
-                    height: 1.35,
-                    color: Colors.white.withValues(alpha: 0.85),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.05),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.07),
-                    ),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Icon(
-                        Icons.info_outline,
-                        size: 18,
-                        color: Color(0xFF3182CE),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Uyarı bildirimi gelmediyse önce bir kez internet kontrolü yapın veya uyarıyı tetiklemek için kısa süreli mobil veriyi kapat/aç yapabilirsiniz.',
-                          style: GoogleFonts.inter(
-                            fontSize: 13,
-                            height: 1.35,
-                            color: Colors.white.withValues(alpha: 0.7),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 18),
-                Row(
-                  children: [
-                    Expanded(
-                      child: SizedBox(
-                        height: 48,
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            side: BorderSide(
-                              color: Colors.white.withValues(alpha: 0.25),
-                            ),
-                            foregroundColor: Colors.white70,
-                          ),
-                          onPressed: _closeHotspotInfo,
-                          child: const Text('Kapat'),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: SizedBox(
-                        height: 48,
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF3182CE),
-                            foregroundColor: Colors.white,
-                          ),
-                          onPressed: () async {
-                            _handleManualConnectionCheck();
-                            if (_connectionStatus.isConnected) {
-                              _closeHotspotInfo();
-                            }
-                          },
-                          child: const Text('Bağlantıyı Kontrol Et'),
+                          fontSize: 10.5 * uiScale,
+                          height: 1.28,
+                          color: Colors.white.withValues(alpha: 0.55),
                         ),
                       ),
                     ),
@@ -664,7 +583,7 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -697,7 +616,7 @@ class _HomePageState extends State<HomePage> {
       onTap: onTap,
       isEnabled: isEnabled,
       child: Container(
-        height: 140,
+        height: 122,
         decoration: BoxDecoration(
           color: const Color(0xFF2A2A3E).withValues(alpha: 0.8 * opacity),
           borderRadius: BorderRadius.circular(16),
@@ -717,23 +636,23 @@ class _HomePageState extends State<HomePage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
-              width: 50,
-              height: 50,
+              width: 44,
+              height: 44,
               decoration: BoxDecoration(
                 color: finalIconColor.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icon, size: 28, color: finalIconColor),
+              child: Icon(icon, size: 26, color: finalIconColor),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             Text(
               title,
               textAlign: TextAlign.center,
               style: GoogleFonts.inter(
-                fontSize: 14,
+                fontSize: 13.2,
                 fontWeight: FontWeight.w500,
                 color: Colors.white.withValues(alpha: opacity),
-                height: 1.3,
+                height: 1.25,
               ),
             ),
           ],
@@ -748,7 +667,7 @@ class _HomePageState extends State<HomePage> {
     try {
       final hasVibrator = await Vibration.hasVibrator();
       if (hasVibrator == true) {
-        await Vibration.vibrate(duration: 50);
+        await Vibration.vibrate(duration: 40, amplitude: 128);
       }
     } catch (e) {
       // Vibration hatası durumunda sessizce devam et
@@ -756,41 +675,28 @@ class _HomePageState extends State<HomePage> {
 
     // Context hala geçerliyse devam et
     if (!mounted) return;
-
     // Card tıklandığında bağlantı kontrolü yap
     setState(() {
       _isCheckingConnection = true;
     });
-
     try {
       await _connectionService.checkConnection();
       if (!mounted) return; // async gap sonrası güvenlik
-      // Bağlantı kontrolü sonucunun gelmesini bekle
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (!mounted) return;
     } catch (e) {
       debugPrint('Card tap connection check failed: $e');
-    } finally {
       if (mounted) {
-        setState(() {
-          _isCheckingConnection = false;
-        });
+        setState(() {});
       }
     }
 
     // Bağlantı kontrolü sonrası durumu kontrol et
     if (!_connectionStatus.isConnected) {
-      // Bağlantı yoksa titreşim + uyarı göster
       try {
         final hasVibrator = await Vibration.hasVibrator();
         if (hasVibrator == true) {
-          // Hata titreşimi - daha uzun ve keskin
           await Vibration.vibrate(duration: 200);
         }
-      } catch (e) {
-        // Vibration hatası durumunda sessizce devam et
-      }
-
+      } catch (_) {}
       if (!mounted) return;
       _showToast(
         icon: Icons.wifi_off,

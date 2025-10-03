@@ -87,13 +87,13 @@ class MediaService {
             // ignore: avoid_print
             print('[MediaService] using cached hostname ip: $cached');
           }
-          return 'http://$cached:3000';
+          return ConnectionService().buildBaseUrlFromHost(cached);
         }
         if (kDebugMode) {
           // ignore: avoid_print
           print('[MediaService] using raspberrypi.local directly');
         }
-        return 'http://raspberrypi.local:3000';
+        return 'http://raspberrypi.local:3000'; // IPv6 mDNS çözülürse ConnectionService üzerinden cache'e düşer
       case ConnectionType.hotspot:
       case ConnectionType.none:
         if (kDebugMode) {

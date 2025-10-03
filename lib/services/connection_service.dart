@@ -130,37 +130,31 @@ class ConnectionService {
 
   Future<ConnectionStatus> checkConnection() async {
     try {
-      // WiFi'yi önce kontrol et (hostname resolve ile)
+      // Önce WiFi (hostname/mDNS) dene
       final wifiResult = await _checkWifiWithDNSResolve();
-
       if (wifiResult.isConnected) {
-        debugPrint('Selected: WiFi connection (skipping hotspot check)');
         _updateStatus(wifiResult);
         return wifiResult;
       }
 
-      // WiFi başarısızsa hotspot'u kontrol et
-      debugPrint('WiFi failed, checking hotspot...');
+      // Sonra hotspot sabit IP dene
       final hotspotResult = await _checkEndpoint(
         _hotspotEndpoint,
         ConnectionType.hotspot,
       );
-
       if (hotspotResult.isConnected) {
-        debugPrint('Selected: Hotspot connection');
         _updateStatus(hotspotResult);
         return hotspotResult;
       }
 
-      // Hiçbir bağlantı yoksa
-      final disconnectedStatus = ConnectionStatus.disconnected();
-      _updateStatus(disconnectedStatus);
-      return disconnectedStatus;
+      final disconnected = ConnectionStatus.disconnected();
+      _updateStatus(disconnected);
+      return disconnected;
     } catch (e) {
-      debugPrint('Connection check error: $e');
-      final disconnectedStatus = ConnectionStatus.disconnected();
-      _updateStatus(disconnectedStatus);
-      return disconnectedStatus;
+      debugPrint('checkConnection fatal error: $e');
+      final disconnected = ConnectionStatus.disconnected();
+      _updateStatus(disconnected);
+      return disconnected;
     }
   }
 
@@ -169,8 +163,8 @@ class ConnectionService {
     final resolvedIP = await _resolveHostname('raspberrypi.local');
 
     if (resolvedIP != null) {
-      // IP ile URL oluştur
-      final ipUrl = 'http://$resolvedIP:3000/api/mobile/check';
+      // IP ile URL oluştur (IPv6 link-local formatını düzelt)
+      final ipUrl = _buildServiceUrl(resolvedIP, 3000, '/api/mobile/check');
       debugPrint('Using resolved IP URL: $ipUrl');
       return await _checkEndpoint(ipUrl, ConnectionType.wifi);
     } else {
@@ -178,6 +172,49 @@ class ConnectionService {
       debugPrint('DNS resolve failed, trying hostname directly...');
       return await _checkEndpoint(_wifiEndpoint, ConnectionType.wifi);
     }
+  }
+
+  String _buildServiceUrl(String host, int port, String path) {
+    // IPv6 adres tespiti (birden fazla ':' içeriyorsa)
+    final isIPv6 = host.contains(':');
+    if (isIPv6) {
+      // Zone id varsa ayır (ör: fe80::abc%en1)
+      String zone = '';
+      final zoneIndex = host.indexOf('%');
+      if (zoneIndex != -1) {
+        zone = host.substring(zoneIndex + 1);
+        host = host.substring(0, zoneIndex);
+      }
+      if (zone.isNotEmpty) {
+        // '%' encode et
+        zone = zone.replaceAll('%', '%25');
+        host = '$host%25$zone';
+      }
+      // Köşeli parantez ekle (yoksa)
+      if (!host.startsWith('[')) {
+        host = '[$host]';
+      }
+    }
+    return 'http://$host:$port$path';
+  }
+
+  // Dış servisler için sadece host verildiğinde base URL döner (port 3000 varsayım)
+  String buildBaseUrlFromHost(String host, {int port = 3000}) {
+    final isIPv6 = host.contains(':');
+    if (isIPv6) {
+      String zone = '';
+      final zoneIndex = host.indexOf('%');
+      if (zoneIndex != -1) {
+        zone = host.substring(zoneIndex + 1);
+        host = host.substring(0, zoneIndex);
+      }
+      if (zone.isNotEmpty) {
+        zone = zone.replaceAll('%', '%25');
+        host = '$host%25$zone';
+      }
+      if (!host.startsWith('[')) host = '[$host]';
+    }
+    return 'http://$host:$port';
   }
 
   Future<String?> _resolveHostname(String hostname) async {
@@ -229,6 +266,16 @@ class ConnectionService {
       }
 
       debugPrint('All hostname resolution methods failed for: $hostname');
+      // Ek olarak tether/hotspot senaryosu için lokal subnet taraması dene
+      final subnetCandidate = await _tryLocalSubnetScan();
+      if (subnetCandidate != null) {
+        debugPrint(
+          'Local subnet scan discovered $hostname -> $subnetCandidate',
+        );
+        _cachedHostnameIP = subnetCandidate;
+        _cacheTime = DateTime.now();
+        return subnetCandidate;
+      }
       return null;
     } catch (e) {
       debugPrint('Hostname resolution failed for $hostname: $e');
@@ -236,47 +283,147 @@ class ConnectionService {
     }
   }
 
-  Future<String?> _androidMDNSLookup(String hostname) async {
+  Future<String?> _tryLocalSubnetScan() async {
     try {
-      // Android'de raw socket ile mDNS query
-      final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-
-      // mDNS query oluştur
-      final query = _buildMDNSQuery(hostname);
-
-      // Multicast adresine gönder (224.0.0.251:5353)
-      final mcastAddr = InternetAddress('224.0.0.251');
-      socket.send(query, mcastAddr, 5353);
-
-      // Yanıt bekle
-      final completer = Completer<String?>();
-      late StreamSubscription subscription;
-
-      Timer(const Duration(seconds: 2), () {
-        if (!completer.isCompleted) {
-          subscription.cancel();
-          socket.close();
-          completer.complete(null);
-        }
-      });
-
-      subscription = socket.listen((event) {
-        if (event == RawSocketEvent.read && !completer.isCompleted) {
-          final packet = socket.receive();
-          if (packet != null) {
-            final ip = _parseMDNSResponse(packet.data, hostname);
-            if (ip != null) {
-              subscription.cancel();
-              socket.close();
-              completer.complete(ip);
+      // Mevcut interface IP'lerinden /24 subnet çıkar
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+      String? subnet;
+      String? selfHost;
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          final a = addr.address;
+          if (a.startsWith('192.168.') || a.startsWith('10.')) {
+            final parts = a.split('.');
+            if (parts.length == 4) {
+              subnet = '${parts[0]}.${parts[1]}.${parts[2]}';
+              selfHost = parts[3];
+              break;
             }
           }
         }
-      });
+        if (subnet != null) break;
+      }
+      if (subnet == null) return null;
 
-      return await completer.future;
+      debugPrint('Subnet scan starting on $subnet.0/24 (heuristic limited)');
+      final candidates = <String>[];
+      // Öncelikli olası IP'ler: .1 (gateway), .2, .3, .10, .20, .30, kendi IP çevresi
+      final priority = <int>{1, 2, 3, 10, 20, 30};
+      if (selfHost != null) {
+        final s = int.tryParse(selfHost);
+        if (s != null) {
+          for (final delta in [-2, -1, 1, 2, 3, 4, 5]) {
+            final cand = s + delta;
+            if (cand > 1 && cand < 255) priority.add(cand);
+          }
+        }
+      }
+      // İlk seti ekle
+      for (final h in priority) {
+        candidates.add('$subnet.$h');
+      }
+      // Genişleme: 4..50 arası (zaten öncelikler eklenmişse atlanır)
+      for (int host = 4; host <= 50; host++) {
+        final ip = '$subnet.$host';
+        if (!candidates.contains(ip)) candidates.add(ip);
+      }
+
+      // Paralel limit
+      const parallel = 6;
+      final deadline = DateTime.now().add(const Duration(seconds: 4));
+      for (int i = 0; i < candidates.length; i += parallel) {
+        if (DateTime.now().isAfter(deadline)) {
+          debugPrint('Subnet scan timeout (global)');
+          return null;
+        }
+        final slice = candidates.skip(i).take(parallel).toList();
+        final futures = slice.map((ip) async {
+          final url = 'http://$ip:3000/api/mobile/check';
+          try {
+            final resp = await http
+                .get(Uri.parse(url))
+                .timeout(const Duration(milliseconds: 700));
+            if (resp.statusCode == 200 &&
+                resp.body.contains('connectionType')) {
+              debugPrint('Subnet scan hit: $ip');
+              return ip;
+            }
+          } catch (_) {}
+          return null;
+        });
+        final results = await Future.wait(futures);
+        final found = results.firstWhere((e) => e != null, orElse: () => null);
+        if (found != null) return found;
+      }
+      return null;
     } catch (e) {
-      debugPrint('Android mDNS lookup failed: $e');
+      debugPrint('Local subnet scan failed: $e');
+      return null;
+    }
+  }
+
+  Future<String?> _androidMDNSLookup(String hostname) async {
+    try {
+      final multicastAddr = InternetAddress('224.0.0.251');
+      RawDatagramSocket? socket;
+      try {
+        socket = await RawDatagramSocket.bind(
+          InternetAddress.anyIPv4,
+          5353,
+          reuseAddress: true,
+          // reusePort kaldırıldı (desteklemeyen platformlar hata veriyordu)
+        );
+      } catch (bindErr) {
+        debugPrint('mDNS bind 5353 failed ($bindErr), giving up on mDNS');
+        return null; // 5353 olmadan güvenilir mDNS alamayız
+      }
+
+      try {
+        socket.joinMulticast(multicastAddr);
+      } catch (e) {
+        debugPrint('Multicast join failed: $e');
+      }
+      socket.multicastHops = 255;
+      socket.broadcastEnabled = true;
+
+      final query = _buildMDNSQuery(hostname);
+      socket.send(query, multicastAddr, 5353);
+
+      final completer = Completer<String?>();
+      late StreamSubscription sub;
+      final timer = Timer(const Duration(milliseconds: 1300), () {
+        if (!completer.isCompleted) completer.complete(null);
+      });
+      sub = socket.listen(
+        (event) {
+          if (event == RawSocketEvent.read && !completer.isCompleted) {
+            final dg = socket!.receive();
+            if (dg != null) {
+              final ip = _parseMDNSResponse(dg.data, hostname);
+              if (ip != null) {
+                completer.complete(ip);
+              }
+            }
+          }
+        },
+        onError: (_) {
+          if (!completer.isCompleted) completer.complete(null);
+        },
+        onDone: () {
+          if (!completer.isCompleted) completer.complete(null);
+        },
+      );
+
+      final result = await completer.future;
+      await sub.cancel();
+      timer.cancel();
+      socket.close();
+      return result;
+    } catch (e) {
+      debugPrint('Android mDNS lookup (revised) failed: $e');
       return null;
     }
   }

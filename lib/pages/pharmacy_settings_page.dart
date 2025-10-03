@@ -95,26 +95,17 @@ class _PharmacySettingsPageState extends State<PharmacySettingsPage> {
 
   Future<String> _getApiBaseUrl() async {
     const hostname = 'raspberrypi.local';
-    // Güncel bağlantıyı kontrol et
     try {
       await _connectionService.checkConnection();
-    } catch (_) {
-      // sessiz geç
-    }
-
+    } catch (_) {}
     final status = _connectionService.currentStatus;
-
     if (status.type == ConnectionType.wifi) {
-      // Önce cache'lenmiş/resolved IP'yi dene
       final cached = _connectionService.getCachedHostnameIP(hostname);
       if (cached != null && cached.isNotEmpty) {
-        return 'http://$cached:3000';
+        return _connectionService.buildBaseUrlFromHost(cached);
       }
-      // Hostname fallback
       return 'http://$hostname:3000';
     }
-
-    // Hotspot ya da none: sabit IP
     return 'http://192.168.4.1:3000';
   }
 
